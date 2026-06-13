@@ -9,24 +9,21 @@ namespace CraftFlow.Services;
 
 /// <summary>
 /// 职业图标服务，所有图标直接从游戏资源加载，无需外部 PNG 文件。
-/// - 职业图标：通过 GameIconLookup 从游戏资源包加载
-/// - 分组图标：使用分组中第一个职业的游戏图标
-/// 缓存必须同时持有 ISharedImmediateTexture 和 IDalamudTextureWrap，
-/// 否则共享纹理释放后 wrap 会被 dispose（ObjectDisposedException）。
+/// 只缓存 ISharedImmediateTexture，每次 Draw 时通过 GetWrapOrDefault() 获取新鲜 wrap，
+/// 避免 UnknownTextureWrap 被 Dalamud 内部纹理管理器回收导致的 ObjectDisposedException。
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
     private readonly ITextureProvider _textureProvider;
     private readonly IPluginLog _log;
 
-    // 职业图标缓存：必须同时持有 Shared 和 Wrap 防止 GC/Dispose
-    private readonly Dictionary<uint, (ISharedImmediateTexture Shared, IDalamudTextureWrap Wrap)> _iconCache = [];
+    // 只缓存 Shared，不缓存 Wrap（Wrap 会被 Dalamud 内部回收）
+    private readonly Dictionary<uint, ISharedImmediateTexture> _iconSharedCache = [];
 
-    // 分组图标缓存：同上
-    private readonly Dictionary<string, (ISharedImmediateTexture Shared, IDalamudTextureWrap Wrap)> _roleIconCache = [];
+    private readonly Dictionary<string, ISharedImmediateTexture> _roleIconSharedCache = [];
 
     /// <summary>
-    /// 分组英文名 → 代表职业的 ClassJobId（使用分组中第一个职业的图标）。
+    /// 分组英文名 → 代表职业的 ClassJobId。
     /// </summary>
     private static readonly Dictionary<string, uint> RoleGroupRepresentativeJob = new()
     {
@@ -45,80 +42,76 @@ public sealed class JobIconService : IDisposable
     {
         _textureProvider = textureProvider;
         _log = log;
-        _log.Debug("JobIconService 初始化: 使用纯游戏图标模式（无外部 PNG）");
+        _log.Debug("JobIconService 初始化: 纯游戏图标模式");
     }
 
     /// <summary>
-    /// 获取职业图标的 ImTextureID，直接从游戏资源加载。
+    /// 获取职业图标，防御性处理 wrap dispose。
     /// </summary>
     public ImTextureID GetJobIcon(uint classJobId)
     {
-        if (_iconCache.TryGetValue(classJobId, out var cached))
-            return cached.Wrap.Handle;
-
-        var iconId = GetClassJobIconId(classJobId);
-        if (iconId == 0)
-        {
-            _log.Debug($"职业图标 ID 未映射: ClassJobId={classJobId}");
-            return new ImTextureID(0);
-        }
-
         try
         {
-            var shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
-            var wrap = shared.GetWrapOrDefault();
-            if (wrap is not null)
+            // 确保有 shared texture
+            if (!_iconSharedCache.TryGetValue(classJobId, out var shared))
             {
-                _iconCache[classJobId] = (shared, wrap);
-                _log.Debug($"游戏图标加载成功: ClassJobId={classJobId} IconId={iconId}");
-                return wrap.Handle;
+                var iconId = GetClassJobIconId(classJobId);
+                if (iconId == 0) return new ImTextureID(0);
+
+                shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
+                _iconSharedCache[classJobId] = shared;
             }
-            _log.Debug($"游戏图标 wrap 为 null: IconId={iconId}");
+
+            var wrap = shared.GetWrapOrDefault();
+            if (wrap is not null) return wrap.Handle;
+        }
+        catch (ObjectDisposedException)
+        {
+            // shared 已失效，移除缓存让下次重新加载
+            _iconSharedCache.Remove(classJobId);
         }
         catch (Exception ex)
         {
-            _log.Debug($"游戏图标加载失败 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"图标加载异常 ClassJobId={classJobId}: {ex.Message}");
         }
 
         return new ImTextureID(0);
     }
 
     /// <summary>
-    /// 获取角色分组图标，使用分组中第一个职业的游戏图标。
+    /// 获取角色分组图标，防御性处理 wrap dispose。
     /// </summary>
     public ImTextureID GetRoleGroupIcon(string englishName)
     {
-        if (_roleIconCache.TryGetValue(englishName, out var cached))
-            return cached.Wrap.Handle;
-
-        if (!RoleGroupRepresentativeJob.TryGetValue(englishName, out var repJobId))
-            return new ImTextureID(0);
-
-        var iconId = GetClassJobIconId(repJobId);
-        if (iconId == 0)
-            return new ImTextureID(0);
-
         try
         {
-            var shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
-            var wrap = shared.GetWrapOrDefault();
-            if (wrap is not null)
+            if (!_roleIconSharedCache.TryGetValue(englishName, out var shared))
             {
-                _roleIconCache[englishName] = (shared, wrap);
-                return wrap.Handle;
+                if (!RoleGroupRepresentativeJob.TryGetValue(englishName, out var repJobId))
+                    return new ImTextureID(0);
+
+                var iconId = GetClassJobIconId(repJobId);
+                if (iconId == 0) return new ImTextureID(0);
+
+                shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
+                _roleIconSharedCache[englishName] = shared;
             }
+
+            var wrap = shared.GetWrapOrDefault();
+            if (wrap is not null) return wrap.Handle;
+        }
+        catch (ObjectDisposedException)
+        {
+            _roleIconSharedCache.Remove(englishName);
         }
         catch (Exception ex)
         {
-            _log.Debug($"分组图标加载失败: {englishName} ({ex.Message})");
+            _log.Debug($"分组图标异常 {englishName}: {ex.Message}");
         }
 
         return new ImTextureID(0);
     }
 
-    /// <summary>
-    /// 职业图标 ID 映射（战斗职业用职业水晶图标，生产/采集用工具图标）。
-    /// </summary>
     private static uint GetClassJobIconId(uint classJobId) => classJobId switch
     {
         // 坦克
@@ -140,7 +133,7 @@ public sealed class JobIconService : IDisposable
 
     public void Dispose()
     {
-        _iconCache.Clear();
-        _roleIconCache.Clear();
+        _iconSharedCache.Clear();
+        _roleIconSharedCache.Clear();
     }
 }
