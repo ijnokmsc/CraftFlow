@@ -1,0 +1,30 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <!-- 国服 XIVLauncherCN 的 Dalamud 安装路径
+         Dalamud.NET.Sdk Sdk.props 在 csproj PropertyGroup 之前求值，其第28行无条件设置
+         DalamudLibPath，但 AssemblySearchPaths 也在 Sdk.props 中设置（使用 DalamudLibPath）。
+         csproj PropertyGroup 在 SDK import 之后求值，可以覆盖所有属性。
+         实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\ -->
+    <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+    <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
+    <Version>0.1.0.0</Version>
+    <PackageProjectUrl>https://github.com/CraftFlow/CraftFlow</PackageProjectUrl>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- 将 HQHelper 项目 (https://hqhelper.nbb.fan/) 的 game-gear SVG 图标作为嵌入资源 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Icons\*.svg" />
+  </ItemGroup>
+
+  <!-- 编译后自动部署到 XIVLauncherCN devPlugins 目录 -->
+  <Target Name="DeployToDevPlugins" AfterTargets="Build">
+    <MakeDir Directories="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" />
+    <Copy SourceFiles="$(OutputPath)CraftFlow.dll" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutputPath)CraftFlow.json" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" Condition="Exists('$(OutputPath)CraftFlow.json')" />
+    <Message Importance="high" Text="已部署到 devPlugins: $(OutputPath)" />
+  </Target>
+</Project>

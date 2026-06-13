@@ -1,0 +1,586 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin.Services;
+using CraftFlow.Config;
+using CraftFlow.Data.GameData;
+using CraftFlow.Data.Models;
+using CraftFlow.Services;
+using CraftFlow.UI.Widgets;
+
+namespace CraftFlow.UI.Tabs;
+
+/// <summary>
+/// 装备武器制作 Tab，提供三级选择流程和 BOM 展示功能。
+/// 左面板：版本筛选 → 角色分组 → 职业选择 → 槽位分组展示 → 一键添加。
+/// 右面板：制作列表 + 材料清单（带"显示水晶"切换） + 操作按钮。
+/// </summary>
+public sealed class EquipmentTab
+{
+    private readonly EquipmentRepository _equipRepo;
+    private readonly EquipmentSetService _setService;
+    private readonly BomExpander _bomExpander;
+    private readonly MaterialAggregator _materialAggregator;
+    private readonly CraftOrderCalculator _craftOrderCalculator;
+    private readonly RecipeRepository _recipeRepo;
+    private readonly MaterialListWidget _materialListWidget;
+    private readonly EquipmentSlotGroupWidget _slotGroupWidget;
+    private readonly QuickAddButtonsWidget _quickAddWidget;
+    private readonly PluginConfig _config;
+    private readonly IPluginLog _log;
+
+    // 选中状态
+    private RoleGroup? _selectedRoleGroup;
+    private uint _selectedClassJobId;
+    private readonly List<CraftTarget> _selectedItems = [];
+    private string _loadedFavName = string.Empty; // 当前加载的收藏名称
+    private Dictionary<EquipmentSlotType, List<EquipmentItem>> _groupedEquipment = [];
+    private BomNode? _bomResult;
+    private List<MaterialEntry> _materialSummary = [];
+    private List<CraftStep> _craftSteps = [];
+    private bool _showTreeView = false;
+
+    // 版本筛选状态
+    private int _versionFilter;
+
+    // 动态版本列表缓存
+    private List<(string Label, int Value)>? _cachedVersionList;
+    private bool _versionListInitialized = false;
+
+    // 收藏名称输入
+    private string _favName = string.Empty;
+    private bool _showFavPopup;
+
+    /// <summary>
+    /// 初始化 EquipmentTab 实例。
+    /// </summary>
+    public EquipmentTab(
+        EquipmentRepository equipRepo,
+        EquipmentSetService setService,
+        BomExpander bomExpander,
+        MaterialAggregator materialAggregator,
+        CraftOrderCalculator craftOrderCalculator,
+        RecipeRepository recipeRepo,
+        MaterialListWidget materialListWidget,
+        PluginConfig config,
+        IPluginLog log)
+    {
+        _equipRepo = equipRepo;
+        _setService = setService;
+        _bomExpander = bomExpander;
+        _materialAggregator = materialAggregator;
+        _craftOrderCalculator = craftOrderCalculator;
+        _recipeRepo = recipeRepo;
+        _materialListWidget = materialListWidget;
+        _slotGroupWidget = new EquipmentSlotGroupWidget(log);
+        _quickAddWidget = new QuickAddButtonsWidget(setService, log);
+        _config = config;
+        _log = log;
+
+        // 默认版本：0 表示全部，初始化时将延迟设置到最新版本
+        _versionFilter = 0;
+    }
+
+    /// <summary>
+    /// 绘制左面板（装备选择流程）。
+    /// </summary>
+    public void DrawLeftPanel()
+    {
+        DrawVersionFilter();
+        ImGui.Separator();
+        DrawRoleGroupSelector();
+        ImGui.Separator();
+        DrawClassJobSelector();
+        ImGui.Separator();
+        DrawQuickAddButtons();
+        ImGui.Separator();
+        DrawEquipmentBySlot();
+    }
+
+    /// <summary>
+    /// 绘制右面板（材料清单和操作按钮）。
+    /// </summary>
+    public void DrawRightPanel()
+    {
+        if (_selectedItems.Count == 0)
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(0.6f, 0.6f, 0.6f, 1f), "请在左侧选择装备以查看材料清单");
+            return;
+        }
+
+        // 标题 + 收藏按钮 + 清空
+        ImGui.Text($"材料清单 ({_selectedItems.Count} 件装备)");
+        if (!string.IsNullOrEmpty(_loadedFavName))
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), $"({_loadedFavName})");
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("收藏###SaveEquipFav"))
+        {
+            _favName = $"装备 {DateTime.Now:yyyyMMdd_HHmmss}";
+            _showFavPopup = true;
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("一键清空###ClearAll"))
+        {
+            _selectedItems.Clear();
+            RecalculateBom();
+        }
+
+        // 汇总/树视图切换
+        ImGui.SameLine();
+        if (ImGui.Checkbox("树视图###Equip_ShowTreeView", ref _showTreeView))
+        {
+            // 切换视图模式
+        }
+
+        // 显示水晶切换
+        ImGui.SameLine();
+        bool showCrystals = _config.ShowCrystals;
+        if (ImGui.Checkbox("显示水晶###Equip_ShowCrystals", ref showCrystals))
+        {
+            _config.ShowCrystals = showCrystals;
+            _config.Save();
+            RecalculateBom();
+        }
+
+        ImGui.Separator();
+
+        if (_showTreeView && _bomResult is not null)
+        {
+            _materialListWidget.DrawTree(_bomResult);
+        }
+        else
+        {
+            _materialListWidget.DrawMaterialPanel(_materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y);
+        }
+
+        DrawFavPopup();
+    }
+
+    /// <summary>
+    /// 获取当前选中的制作目标列表。
+    /// </summary>
+    public List<CraftTarget> GetSelectedTargets() => _selectedItems.ToList();
+
+    /// <summary>设置当前加载的收藏/推荐名称。</summary>
+    public void SetLoadedFavName(string name) => _loadedFavName = name;
+
+    /// <summary>
+    /// 从外部添加制作目标（如从收藏推荐 Tab 加载）。
+    /// </summary>
+    /// <param name="targets">要添加的制作目标列表。</param>
+    public void AddTargets(List<CraftTarget> targets)
+    {
+        foreach (var target in targets)
+        {
+            // 去重：如果已存在相同 ItemId，增加数量
+            var existing = _selectedItems.Find(t => t.ItemId == target.ItemId);
+            if (existing is not null)
+            {
+                existing.Quantity += target.Quantity;
+            }
+            else
+            {
+                _selectedItems.Add(new CraftTarget
+                {
+                    ItemId = target.ItemId,
+                    ItemName = target.ItemName,
+                    Quantity = target.Quantity,
+                    Type = target.Type
+                });
+            }
+        }
+
+        RecalculateBom();
+    }
+
+    /// <summary>清空已选项目。</summary>
+    public void ClearSelection()
+    {
+        _selectedItems.Clear();
+        RecalculateBom();
+    }
+
+    /// <summary>
+    /// 获取动态版本列表，从游戏数据中提取实际存在的版本。
+    /// </summary>
+    private List<(string Label, int Value)> GetVersionList()
+    {
+        if (_versionListInitialized && _cachedVersionList is not null)
+        {
+            return _cachedVersionList;
+        }
+
+        var versions = new List<(string Label, int Value)> { ("全部", 0) };
+
+        // 从 EquipmentRepository 获取实际存在的版本列表
+        var patchVersions = _equipRepo.GetAvailablePatchVersions();
+
+        // 按版本号升序排列后添加到列表
+        foreach (var pv in patchVersions.OrderBy(v => v))
+        {
+            string label = FormatPatchVersion(pv);
+            versions.Add((label, pv));
+        }
+
+        _cachedVersionList = versions;
+        _versionListInitialized = true;
+
+        return versions;
+    }
+
+    /// <summary>
+    /// 格式化版本号为显示字符串。
+    /// 例如 70 → "7.0", 71 → "7.1", 72 → "7.2"
+    /// </summary>
+    private static string FormatPatchVersion(int patchVersion)
+    {
+        if (patchVersion >= 100)
+        {
+            int major = patchVersion / 100;
+            int minor = patchVersion % 100;
+            return $"{major}.{minor:D2}";
+        }
+        int maj = patchVersion / 10;
+        int min = patchVersion % 10;
+        return $"{maj}.{min}";
+    }
+
+    /// <summary>
+    /// 绘制版本筛选下拉框。
+    /// 动态获取游戏中的版本列表，默认选中最新版本。
+    /// </summary>
+    private void DrawVersionFilter()
+    {
+        var versions = GetVersionList();
+
+        ImGui.Text("版本筛选:");
+        ImGui.SameLine();
+
+        string currentLabel = versions.FirstOrDefault(v => v.Value == _versionFilter).Label ?? "全部";
+
+        if (ImGui.BeginCombo("###VersionFilter", currentLabel))
+        {
+            for (int i = 0; i < versions.Count; i++)
+            {
+                bool isSelected = _versionFilter == versions[i].Value;
+                if (ImGui.Selectable($"{versions[i].Label}###Ver_{i}", isSelected))
+                {
+                    _versionFilter = versions[i].Value;
+                    RefreshEquipmentList();
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+    }
+
+    /// <summary>
+    /// 绘制角色分组按钮区（3列×3行网格布局）。
+    /// </summary>
+    private void DrawRoleGroupSelector()
+    {
+        ImGui.Text("角色分组:");
+        var groups = RoleGroupDefinitions.RoleGroups;
+
+        for (int i = 0; i < groups.Length; i++)
+        {
+            if (i > 0 && i % 3 != 0) ImGui.SameLine();
+            if (i > 0 && i % 3 == 0) ImGui.NewLine();
+
+            bool isSelected = _selectedRoleGroup == groups[i];
+            if (isSelected)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.3f, 0.5f, 0.8f, 1.0f));
+            }
+
+            if (ImGui.Button($"{groups[i].DisplayName}###RoleGroup_{i}"))
+            {
+                _selectedRoleGroup = groups[i];
+                _selectedClassJobId = 0;
+                if (groups[i].Jobs.Length > 0)
+                {
+                    _selectedClassJobId = groups[i].Jobs[0].ClassJobId;
+                }
+
+                // 自动选择当前职业分组的最佳装备版本
+                AutoSelectBestVersion(groups[i]);
+                RefreshEquipmentList();
+            }
+
+            if (isSelected)
+            {
+                ImGui.PopStyleColor();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 绘制职业列表（选中分组后展开），包含职业图标。
+    /// </summary>
+    private void DrawClassJobSelector()
+    {
+        if (_selectedRoleGroup is null)
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.5f, 0.5f, 1f), "请先选择角色分组");
+            return;
+        }
+
+        ImGui.Text($"职业列表 ({_selectedRoleGroup.DisplayName}):");
+
+        foreach (var job in _selectedRoleGroup.Jobs)
+        {
+            bool isSelected = _selectedClassJobId == job.ClassJobId;
+            if (isSelected)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.2f, 0.9f, 0.2f, 1f));
+            }
+
+            // 显示职业图标（使用图标纹理或彩色标识）
+            var iconTexture = _equipRepo.GetClassJobIconTexture(job.ClassJobId);
+            if (iconTexture is not null)
+            {
+                // 尝试通过 ImGuiHandle 渲染图标（部分 Dalamud 版本支持）
+                try
+                {
+                    var handle = iconTexture.GetType().GetProperty("ImGuiHandle")?.GetValue(iconTexture);
+                    if (handle is not null)
+                    {
+                        // 动态调用 ImGui.Image(handle, size) — 兼容不同 Dalamud 版本
+                        var imageSize = new System.Numerics.Vector2(20, 20);
+                        var imageMethod = typeof(Dalamud.Bindings.ImGui.ImGui).GetMethod("Image",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                            null,
+                            [handle.GetType(), typeof(System.Numerics.Vector2)],
+                            null);
+                        imageMethod?.Invoke(null, [handle, imageSize]);
+                        ImGui.SameLine();
+                    }
+                    else
+                    {
+                        // ImGuiHandle 不可用，使用彩色标识替代
+                        ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
+                        ImGui.SameLine();
+                    }
+                }
+                catch
+                {
+                    // 渲染失败，使用彩色标识替代
+                    ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
+                    ImGui.SameLine();
+                }
+            }
+
+            if (ImGui.Selectable($"  {job.Name}###Job_{job.ClassJobId}", isSelected))
+            {
+                _selectedClassJobId = job.ClassJobId;
+                RefreshEquipmentList();
+            }
+
+            if (isSelected)
+            {
+                ImGui.PopStyleColor();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 绘制装备按大类分类展示（主副武器 / 防具 / 首饰）。
+    /// 每个大类使用可折叠的树节点，展开后显示各槽位的装备列表。
+    /// </summary>
+    private void DrawEquipmentBySlot()
+    {
+        if (_selectedRoleGroup is null || _selectedClassJobId == 0)
+        {
+            return;
+        }
+
+        if (_groupedEquipment.Count == 0)
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.5f, 0.5f, 1f), "该职业无可制作装备");
+            return;
+        }
+
+        foreach (var (categoryName, slotGroups) in EquipmentSlotGroups.EquipmentCategories)
+        {
+            bool hasAnyItem = false;
+            foreach (var group in slotGroups)
+            {
+                foreach (var slot in group.Slots)
+                {
+                    if (_groupedEquipment.TryGetValue(slot, out var items) && items.Count > 0)
+                    {
+                        hasAnyItem = true;
+                        break;
+                    }
+                }
+                if (hasAnyItem) break;
+            }
+
+            if (!hasAnyItem) continue;
+
+            bool isOpen = ImGui.TreeNodeEx($"{categoryName}###Category_{categoryName}",
+                ImGuiTreeNodeFlags.DefaultOpen);
+
+            if (isOpen)
+            {
+                foreach (var group in slotGroups)
+                {
+                    _slotGroupWidget.Draw(group, _groupedEquipment, _selectedItems, () => RecalculateBom());
+                }
+                ImGui.TreePop();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 绘制一键添加按钮区。
+    /// </summary>
+    private void DrawQuickAddButtons()
+    {
+        int? patchVersion = _versionFilter > 0 ? _versionFilter : null;
+        _quickAddWidget.Draw(_selectedRoleGroup, _selectedClassJobId, patchVersion, targets =>
+        {
+            AddTargets(targets);
+        });
+    }
+
+    /// <summary>
+    /// 刷新装备列表，根据当前选中的角色分组和职业重新查询。
+    /// </summary>
+    private void RefreshEquipmentList()
+    {
+        if (_selectedRoleGroup is null || _selectedClassJobId == 0)
+        {
+            _groupedEquipment = [];
+            return;
+        }
+
+        int? patchVersion = _versionFilter > 0 ? _versionFilter : null;
+        _groupedEquipment = _equipRepo.GetEquipmentGroupedBySlot(_selectedRoleGroup, _selectedClassJobId, patchVersion);
+
+        // 不再清除已选物品——切换职业应保留跨职业制作清单
+        // var validItemIds = _groupedEquipment.Values.SelectMany(list => list).Select(e => e.ItemId).ToHashSet();
+        // _selectedItems.RemoveAll(t => !validItemIds.Contains(t.ItemId));
+
+        RecalculateBom();
+    }
+
+    /// <summary>
+    /// 自动选择当前职业分组的最佳装备版本。
+    /// 使用 GetAvailablePatchVersions（已排除 7.05），从最新版本开始检测。
+    /// </summary>
+    private void AutoSelectBestVersion(RoleGroup role)
+    {
+        if (_selectedClassJobId == 0) return;
+
+        // 使用装备版本列表（不含 7.05）
+        var versions = _equipRepo.GetAvailablePatchVersions().OrderByDescending(v => v).ToList();
+        foreach (var ver in versions)
+        {
+            var slotData = _equipRepo.GetEquipmentGroupedBySlot(role, _selectedClassJobId, ver);
+            if (slotData.Values.Any(list => list.Count > 0))
+            {
+                _versionFilter = ver;
+                _cachedVersionList = null;
+                _versionListInitialized = false;
+                return;
+            }
+        }
+        _versionFilter = 0;
+    }
+
+    /// <summary>
+    /// 重新计算 BOM 和材料汇总。
+    /// </summary>
+    private void RecalculateBom()
+    {
+        if (_selectedItems.Count == 0)
+        {
+            _bomResult = null;
+            _materialSummary = [];
+            _craftSteps = [];
+            return;
+        }
+
+        // 对每个选中物品展开 BOM，合并到统一树
+        var combinedRoot = new BomNode
+        {
+            ItemId = 0,
+            ItemName = "汇总",
+            Quantity = 1,
+            Depth = -1
+        };
+
+        foreach (var target in _selectedItems)
+        {
+            var bomTree = _bomExpander.Expand(target.ItemId, target.Quantity);
+            combinedRoot.Children.Add(bomTree);
+        }
+
+        _bomResult = combinedRoot;
+        _materialSummary = _materialAggregator.Aggregate(combinedRoot, _config.ShowCrystals);
+        _craftSteps = _craftOrderCalculator.CalculateOrder(combinedRoot);
+    }
+
+    /// <summary>
+    /// 将当前选择保存为收藏清单。
+    /// </summary>
+    private void SaveAsFavorite()
+    {
+        if (_selectedItems.Count == 0) return;
+
+        var name = string.IsNullOrWhiteSpace(_favName)
+            ? $"装备 {DateTime.Now:yyyyMMdd_HHmmss}" : _favName;
+
+        var preset = new FavoritePreset
+        {
+            Name = name,
+            Selections = _selectedItems.Select(t => new EquipmentSelection(t.ItemId, t.ItemName, t.Quantity)).ToList(),
+            CreatedAt = DateTime.Now
+        };
+
+        var existing = _config.FavoritePresets.FindIndex(p => p.Name == name);
+        if (existing >= 0)
+            _config.FavoritePresets[existing] = preset;
+        else
+            _config.FavoritePresets.Add(preset);
+        _config.Save();
+        _favName = string.Empty;
+        _log.Information($"已保存装备收藏: {name} ({_selectedItems.Count}件)");
+    }
+
+    /// <summary>收藏名称输入弹窗。</summary>
+    private void DrawFavPopup()
+    {
+        if (_showFavPopup)
+            ImGui.OpenPopup("保存收藏");
+
+        if (ImGui.BeginPopupModal("保存收藏", ref _showFavPopup, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.Text("输入收藏名称:");
+            ImGui.SetNextItemWidth(200);
+            ImGui.InputTextWithHint("###FavNameInput", "收藏名称...", ref _favName, 50);
+            if (ImGui.Button("确认保存"))
+            {
+                if (!string.IsNullOrWhiteSpace(_favName))
+                {
+                    SaveAsFavorite();
+                    _showFavPopup = false;
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("取消"))
+            {
+                _showFavPopup = false;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
+        }
+    }
+}

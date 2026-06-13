@@ -1,0 +1,206 @@
+classDiagram
+    direction TB
+
+    class RoleGroup {
+        <<record>>
+        +string DisplayName
+        +string EnglishName
+        +(uint ClassJobId, string Name)[] Jobs
+        +string EquipmentAffix
+        +string AccessoryAffix
+    }
+
+    class EquipmentSlotType {
+        <<enumeration>>
+        MainHand
+        OffHand
+        Head
+        Body
+        Hands
+        Legs
+        Feet
+        Ears
+        Neck
+        Wrists
+        Fingers
+    }
+
+    class AddSlotType {
+        <<enumeration>>
+        WeaponOnly
+        ArmorOnly
+        AccessoryOnly
+        ArmorAndAccessory
+        FullSet
+    }
+
+    class EquipmentItem {
+        +uint ItemId
+        +string ItemName
+        +EquipmentSlotType SlotType
+        +int ItemLevel
+        +bool IsHq
+        +int Quantity
+    }
+
+    class EquipmentSlotGroup {
+        <<record>>
+        +string DisplayName
+        +EquipmentSlotType[] Slots
+    }
+
+    class FavoritePreset {
+        +string Name
+        +List~EquipmentSelection~ Selections
+        +DateTime CreatedAt
+    }
+
+    class EquipmentSelection {
+        +uint ItemId
+        +string ItemName
+        +int Quantity
+    }
+
+    class PresetEntry {
+        <<record>>
+        +string DisplayName
+        +string EquipmentAffix
+        +string AccessoryAffix
+        +int ItemLevel
+        +bool IsHq
+        +bool IncludeWeapon
+    }
+
+    class EquipmentRepository {
+        -LuminaCache _cache
+        -IPluginLog _log
+        +GetEquipmentByRoleAndSlot(RoleGroup, uint classJobId, EquipmentSlotType slot, int~? patchVersion) List~EquipmentItem~
+        +GetEquipmentGroupedBySlot(RoleGroup, uint classJobId, int~? patchVersion) Dictionary~EquipmentSlotType, List~EquipmentItem~~
+        +GetBestInSlot(RoleGroup, EquipmentSlotType slot, bool hqOnly, int~? patchVersion) EquipmentItem~
+        +GetSlotTypeForItem(Item item) EquipmentSlotType
+        +IsAccessorySlot(EquipmentSlotType slot) bool
+    }
+
+    class EquipmentSetService {
+        -EquipmentRepository _equipRepo
+        -RecipeRepository _recipeRepo
+        -IPluginLog _log
+        +AddWeaponSet(RoleGroup, uint classJobId, int quantity) List~CraftTarget~
+        +AddArmorSet(RoleGroup, uint classJobId, int quantity) List~CraftTarget~
+        +AddAccessorySet(RoleGroup, uint classJobId, int quantity) List~CraftTarget~
+        +AddArmorAndAccessorySet(RoleGroup, uint classJobId, int quantity) List~CraftTarget~
+        +AddFullSet(RoleGroup, uint classJobId, int quantity) List~CraftTarget~
+        +AddByType(RoleGroup, uint classJobId, AddSlotType type, int quantity) List~CraftTarget~
+    }
+
+    class PresetService {
+        -EquipmentRepository _equipRepo
+        -PluginConfig _config
+        -IPluginLog _log
+        +GetBuiltInPresets() PresetEntry[]
+        +GetFavoritePresets() List~FavoritePreset~
+        +SaveFavorite(FavoritePreset preset) void
+        +DeleteFavorite(string name) void
+        +RenameFavorite(string oldName, string newName) void
+        +LoadPresetToTargets(PresetEntry preset) List~CraftTarget~
+        +LoadPresetToTargets(FavoritePreset preset) List~CraftTarget~
+    }
+
+    class LuminaCache {
+        +Dictionary~uint, Item~ ItemSheet
+        +Dictionary~uint, Recipe~ RecipeSheet
+        +Dictionary~uint, List~Recipe~~ RecipeByResultItem
+        +Dictionary~uint, ClassJob~ ClassJobSheet
+        +Dictionary~uint, ItemUICategory~ ItemUICategorySheet
+        +Dictionary~uint, ClassJobCategory~ ClassJobCategorySheet
+        +Dictionary~uint, EquipSlotCategory~ EquipSlotCategorySheet
+        +Dictionary~string, uint~ ClassJobCategoryByName
+        +Init() void
+        +GetItemName(uint itemId) string
+    }
+
+    class MaterialAggregator {
+        -RecipeRepository _recipeRepo
+        -LuminaCache _cache
+        -IPluginLog _log
+        -const uint CrystalUICategoryId = 59
+        +Aggregate(BomNode root, bool showCrystals) List~MaterialEntry~
+        -WalkLeaves(BomNode, Dictionary, bool) void
+        -IsCrystalOrCluster(MaterialEntry) bool
+    }
+
+    class GbrIpcClient {
+        +bool IsAvailable
+        +Subscribe() void
+        +DelayedSubscribe(IFramework framework) void
+        +Identify(string text) uint
+        +GetVersion() int
+        +Dispose() void
+    }
+
+    class PluginConfig {
+        +int Version
+        +int DefaultVersion
+        +bool ShowCrystals
+        +List~FavoritePreset~ FavoritePresets
+        +Save() void
+    }
+
+    class EquipmentTab {
+        -EquipmentRepository _equipRepo
+        -EquipmentSetService _setService
+        -BomExpander _bomExpander
+        -MaterialAggregator _materialAggregator
+        -RecipeRepository _recipeRepo
+        -RoleGroup? _selectedRoleGroup
+        -uint _selectedClassJobId
+        -Dictionary~EquipmentSlotType, List~EquipmentItem~~ _groupedEquipment
+        -List~CraftTarget~ _selectedItems
+        -int _versionFilter
+        +DrawLeftPanel() void
+        +DrawRightPanel() void
+        -DrawRoleGroupSelector() void
+        -DrawClassJobSelector() void
+        -DrawEquipmentBySlot() void
+        -RefreshEquipmentList() void
+        -RecalculateBom() void
+    }
+
+    class FavoritesTab {
+        -PresetService _presetService
+        -EquipmentRepository _equipRepo
+        -IPluginLog _log
+        +DrawLeftPanel() void
+        +DrawRightPanel() void
+        -DrawBuiltInPresets() void
+        -DrawFavoritePresets() void
+    }
+
+    class QuickAddButtonsWidget {
+        -EquipmentSetService _setService
+        +Draw(RoleGroup?, uint classJobId, Action~List~CraftTarget~~ onAdded) void
+    }
+
+    class EquipmentSlotGroupWidget {
+        -IPluginLog _log
+        +Draw(EquipmentSlotGroup group, List~EquipmentItem~ items, List~CraftTarget~ selectedItems) void
+    }
+
+    RoleGroup --> EquipmentItem : filters by affix
+    EquipmentRepository --> LuminaCache : queries
+    EquipmentRepository --> RoleGroup : uses affix
+    EquipmentRepository --> EquipmentItem : produces
+    EquipmentSetService --> EquipmentRepository : queries
+    EquipmentSetService --> AddSlotType : determines slots
+    EquipmentSetService --> CraftTarget : produces
+    PresetService --> EquipmentRepository : queries
+    PresetService --> PresetEntry : loads built-in
+    PresetService --> FavoritePreset : manages
+    PresetService --> PluginConfig : persists
+    FavoritePreset --> EquipmentSelection : contains
+    EquipmentTab --> EquipmentRepository : queries
+    EquipmentTab --> EquipmentSetService : adds sets
+    EquipmentTab --> QuickAddButtonsWidget : contains
+    EquipmentTab --> EquipmentSlotGroupWidget : contains
+    MaterialAggregator --> LuminaCache : checks crystal category
+    FavoritesTab --> PresetService : manages presets

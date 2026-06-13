@@ -1,0 +1,141 @@
+sequenceDiagram
+    participant User
+    participant EquipmentTab
+    participant EquipmentRepository
+    participant LuminaCache
+
+    User->>EquipmentTab: 点击角色分组按钮（如"防护职业"）
+    EquipmentTab->>EquipmentTab: 设置 _selectedRoleGroup = RoleGroups[0]
+    EquipmentTab->>EquipmentTab: DrawClassJobSelector() 显示该分组下的职业列表
+
+    User->>EquipmentTab: 点击具体职业（如"骑士"）
+    EquipmentTab->>EquipmentTab: 设置 _selectedClassJobId = 19
+    EquipmentTab->>EquipmentRepository: GetEquipmentGroupedBySlot(roleGroup, classJobId, versionFilter)
+    
+    EquipmentRepository->>LuminaCache: 获取 ClassJobCategorySheet
+    LuminaCache-->>EquipmentRepository: Sheet 数据
+    
+    loop 每个可制作装备 Item
+        EquipmentRepository->>LuminaCache: 获取 Item.ClassJobCategory
+        EquipmentRepository->>EquipmentRepository: 匹配词缀（防具用 EquipmentAffix，首饰用 AccessoryAffix）
+        EquipmentRepository->>LuminaCache: 获取 Item.EquipSlotCategory
+        EquipmentRepository->>EquipmentRepository: 判断槽位类型
+        EquipmentRepository->>EquipmentRepository: 按 ILvl 降序排列
+    end
+    
+    EquipmentRepository-->>EquipmentTab: Dictionary<EquipmentSlotType, List<EquipmentItem>>
+    EquipmentTab->>EquipmentTab: 缓存到 _groupedEquipment
+    EquipmentTab->>User: 按槽位分组展示装备列表
+
+---
+
+sequenceDiagram
+    participant User
+    participant QuickAddButtonsWidget
+    participant EquipmentSetService
+    participant EquipmentRepository
+    participant EquipmentTab
+
+    User->>QuickAddButtonsWidget: 点击"整套"按钮
+    QuickAddButtonsWidget->>EquipmentSetService: AddFullSet(roleGroup, classJobId, quantity=1)
+    
+    EquipmentSetService->>EquipmentSetService: 确定所有槽位（MainHand + OffHand + Head + ... + Fingers）
+    
+    loop 每个槽位
+        EquipmentSetService->>EquipmentRepository: GetBestInSlot(roleGroup, slot, hqOnly=true)
+        EquipmentRepository->>EquipmentRepository: 查询该槽位+词缀下 ILvl 最高的可制作 HQ 装备
+        EquipmentRepository-->>EquipmentSetService: EquipmentItem (最佳选项)
+        
+        alt 无可用装备（如坦克无副手武器）
+            EquipmentSetService->>EquipmentSetService: 跳过该槽位
+        else 有多个同 ILvl 选项
+            EquipmentSetService->>EquipmentSetService: 记录到 ambiguousSlots
+        end
+    end
+    
+    EquipmentSetService-->>QuickAddButtonsWidget: List<CraftTarget>
+    QuickAddButtonsWidget->>EquipmentTab: onAdded(targets) 回调
+    EquipmentTab->>EquipmentTab: 添加到 _selectedItems
+    EquipmentTab->>EquipmentTab: RecalculateBom()
+    EquipmentTab->>User: 更新右面板材料清单
+
+---
+
+sequenceDiagram
+    participant Plugin as Plugin.cs
+    participant Framework as IFramework
+    participant GbrIpc as GbrIpcClient
+    participant ArtisanIpc as ArtisanIpcClient
+
+    Note over Plugin: 构造函数执行
+    Plugin->>GbrIpc: new GbrIpcClient(...)
+    Plugin->>ArtisanIpc: new ArtisanIpcClient(...)
+    Note over Plugin: 不再立即调用 Subscribe()
+    
+    Plugin->>Framework: Register(OnFrameworkUpdate)
+    
+    loop Framework.Update 每帧回调
+        Framework->>Plugin: OnFrameworkUpdate(fw)
+        
+        alt _gbrRetryCount < 10 && !GbrIpc.IsAvailable
+            Plugin->>Plugin: _gbrRetryCount++
+            Plugin->>GbrIpc: Subscribe()
+            GbrIpc->>GbrIpc: 尝试 GetIpcSubscriber + InvokeFunc(Version)
+            alt 成功
+                GbrIpc-->>Plugin: IsAvailable = true
+                Plugin->>Plugin: Log: "GBR IPC 订阅成功"
+            else 失败
+                GbrIpc-->>Plugin: IsAvailable = false
+                Plugin->>Plugin: 指数退避等待
+            end
+        end
+        
+        alt _artisanRetryCount < 10 && !ArtisanIpc.IsAvailable
+            Plugin->>ArtisanIpc: Subscribe()
+            alt 成功
+                ArtisanIpc-->>Plugin: IsAvailable = true
+            else 失败
+                ArtisanIpc-->>Plugin: IsAvailable = false
+            end
+        end
+        
+        alt 两个 IPC 都已成功 || 两者都重试 10 次失败
+            Plugin->>Framework: Update -= OnFrameworkUpdate（注销回调）
+        end
+    end
+
+---
+
+sequenceDiagram
+    participant User
+    participant FavoritesTab
+    participant PresetService
+    participant EquipmentRepository
+    participant PluginConfig
+
+    User->>FavoritesTab: 切换到收藏推荐 Tab
+    FavoritesTab->>PresetService: GetBuiltInPresets()
+    PresetService-->>FavoritesTab: PresetEntry[] (内置推荐列表)
+    FavoritesTab->>PresetService: GetFavoritePresets()
+    PresetService->>PluginConfig: FavoritePresets
+    PluginConfig-->>PresetService: List<FavoritePreset>
+    PresetService-->>FavoritesTab: 用户收藏列表
+    FavoritesTab->>User: 展示推荐队列 + 我的收藏
+
+    User->>FavoritesTab: 点击推荐"770HQ 坦克通用"的[加载]按钮
+    FavoritesTab->>PresetService: LoadPresetToTargets(presetEntry)
+    PresetService->>EquipmentRepository: GetBestInSlot(roleGroup, slot, hqOnly=true, patchVersion)
+    EquipmentRepository-->>PresetService: 各槽位最佳装备
+    PresetService-->>FavoritesTab: List<CraftTarget>
+    FavoritesTab->>FavoritesTab: 将 targets 传递到 EquipmentTab
+
+    User->>FavoritesTab: 点击[收藏]按钮（推荐→收藏）
+    FavoritesTab->>PresetService: SaveFavorite(preset)
+    PresetService->>PluginConfig: FavoritePresets.Add(preset)
+    PluginConfig->>PluginConfig: Save()
+
+    User->>FavoritesTab: 点击[保存当前选择为收藏]
+    FavoritesTab->>FavoritesTab: 从 EquipmentTab 获取当前选择
+    FavoritesTab->>PresetService: SaveFavorite(newPreset)
+    PresetService->>PluginConfig: FavoritePresets.Add(newPreset)
+    PluginConfig->>PluginConfig: Save()

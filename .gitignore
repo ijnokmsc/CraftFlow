@@ -1,0 +1,45 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.aps
+*.pdb
+*.idb
+*.obj
+*.pch
+*.res
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.rsp
+*.pgc
+*.pgd
+*.meta
+*.tlog
+*.log
+*.manifest
+*.lastbuildstate
+
+# Dalamud output
+bin/
+obj/
+devPlugins/
+
+# 本地部署目录（国服 XIVLauncherCN）
+CraftFlow/bin/
+CraftFlow/obj/
+
+# 压缩包
+*.7z
+*.zip
+*.rar
+
+# macOS
+.DS_Store
+
+# 日志
+*.log
+logs/
