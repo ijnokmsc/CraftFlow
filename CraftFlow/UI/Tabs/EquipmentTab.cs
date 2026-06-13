@@ -376,11 +376,18 @@ public sealed class EquipmentTab
     }
 
     /// <summary>
-    /// 选择职业并刷新装备列表。
+    /// 选择职业并刷新装备列表，同时联动版本。
     /// </summary>
     private void SelectJob(uint classJobId)
     {
         _selectedClassJobId = classJobId;
+
+        // 联动：切换职业时自动选择该职业有装备的最佳版本
+        if (_selectedRoleGroup is not null)
+        {
+            AutoSelectBestVersion(_selectedRoleGroup);
+        }
+
         RefreshEquipmentList();
     }
 
