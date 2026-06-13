@@ -339,7 +339,7 @@ public sealed class EquipmentTab
                 }
 
                 if (clicked)
-                    SelectJob(job.ClassJobId);
+                    SelectJob(job.ClassJobId, group);
 
                 if (isJobSelected)
                 {
@@ -376,11 +376,25 @@ public sealed class EquipmentTab
     }
 
     /// <summary>
-    /// 选择职业并刷新装备列表，同时联动版本。
+    /// 选择职业并刷新装备列表，同时更新角色分组和联动版本。
     /// </summary>
-    private void SelectJob(uint classJobId)
+    private void SelectJob(uint classJobId, RoleGroup? group = null)
     {
         _selectedClassJobId = classJobId;
+
+        // 更新角色分组（从图标点击时传入，或根据 classJobId 反查）
+        if (group is not null)
+        {
+            _selectedRoleGroup = group;
+        }
+        else
+        {
+            // 反查所属角色分组
+            var found = RoleGroupDefinitions.RoleGroups
+                .FirstOrDefault(g => g.Jobs.Any(j => j.ClassJobId == classJobId));
+            if (found is not null)
+                _selectedRoleGroup = found;
+        }
 
         // 联动：切换职业时自动选择该职业有装备的最佳版本
         if (_selectedRoleGroup is not null)
