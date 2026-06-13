@@ -11,17 +11,19 @@ namespace CraftFlow.Services;
 /// 职业图标服务，所有图标直接从游戏资源加载，无需外部 PNG 文件。
 /// - 职业图标：通过 GameIconLookup 从游戏资源包加载
 /// - 分组图标：使用分组中第一个职业的游戏图标
+/// 缓存必须同时持有 ISharedImmediateTexture 和 IDalamudTextureWrap，
+/// 否则共享纹理释放后 wrap 会被 dispose（ObjectDisposedException）。
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
     private readonly ITextureProvider _textureProvider;
     private readonly IPluginLog _log;
 
-    // 游戏图标纹理缓存（必须持有 wrap 引用防止 GC）
-    private readonly Dictionary<uint, IDalamudTextureWrap> _iconCache = [];
+    // 职业图标缓存：必须同时持有 Shared 和 Wrap 防止 GC/Dispose
+    private readonly Dictionary<uint, (ISharedImmediateTexture Shared, IDalamudTextureWrap Wrap)> _iconCache = [];
 
-    // 分组图标缓存（分组英文名 → wrap）
-    private readonly Dictionary<string, IDalamudTextureWrap> _roleIconCache = [];
+    // 分组图标缓存：同上
+    private readonly Dictionary<string, (ISharedImmediateTexture Shared, IDalamudTextureWrap Wrap)> _roleIconCache = [];
 
     /// <summary>
     /// 分组英文名 → 代表职业的 ClassJobId（使用分组中第一个职业的图标）。
@@ -52,7 +54,7 @@ public sealed class JobIconService : IDisposable
     public ImTextureID GetJobIcon(uint classJobId)
     {
         if (_iconCache.TryGetValue(classJobId, out var cached))
-            return cached.Handle;
+            return cached.Wrap.Handle;
 
         var iconId = GetClassJobIconId(classJobId);
         if (iconId == 0)
@@ -67,7 +69,7 @@ public sealed class JobIconService : IDisposable
             var wrap = shared.GetWrapOrDefault();
             if (wrap is not null)
             {
-                _iconCache[classJobId] = wrap;
+                _iconCache[classJobId] = (shared, wrap);
                 _log.Debug($"游戏图标加载成功: ClassJobId={classJobId} IconId={iconId}");
                 return wrap.Handle;
             }
@@ -87,7 +89,7 @@ public sealed class JobIconService : IDisposable
     public ImTextureID GetRoleGroupIcon(string englishName)
     {
         if (_roleIconCache.TryGetValue(englishName, out var cached))
-            return cached.Handle;
+            return cached.Wrap.Handle;
 
         if (!RoleGroupRepresentativeJob.TryGetValue(englishName, out var repJobId))
             return new ImTextureID(0);
@@ -102,7 +104,7 @@ public sealed class JobIconService : IDisposable
             var wrap = shared.GetWrapOrDefault();
             if (wrap is not null)
             {
-                _roleIconCache[englishName] = wrap;
+                _roleIconCache[englishName] = (shared, wrap);
                 return wrap.Handle;
             }
         }
@@ -138,12 +140,7 @@ public sealed class JobIconService : IDisposable
 
     public void Dispose()
     {
-        foreach (var wrap in _iconCache.Values)
-            wrap.Dispose();
         _iconCache.Clear();
-
-        foreach (var wrap in _roleIconCache.Values)
-            wrap.Dispose();
         _roleIconCache.Clear();
     }
 }
