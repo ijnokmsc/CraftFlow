@@ -1,0 +1,12 @@
+[
+  {
+    "Name": "CraftFlow",
+    "InternalName": "CraftFlow",
+    "AssemblyVersion": "0.1.0.0",
+    "Description": "FF14生产辅助插件，提供三大核心功能：(1) BOM递归展开——输入目标装备/食物/收藏品，自动递归分解全部中间材料，生成完整材料清单；(2) 采集推送——一键将待采集材料列表推送至GatherBuddyReborn，快速定位采集点；(3) 一键制作——调用Artisan插件自动制作，支持巧手橙票/紫票收藏品工票计算。使用 /craftflow 打开主窗口。",
+    "DownloadLinkInstall": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.1.0/CraftFlow-v0.1.0.zip",
+    "DownloadLinkUpdate": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.1.0/CraftFlow-v0.1.0.zip",
+    "DownloadLinkChangelog": "https://github.com/ijnokmsc/CraftFlow/releases",
+    "IconUrl": ""
+  }
+]
