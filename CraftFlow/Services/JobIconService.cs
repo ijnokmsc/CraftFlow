@@ -9,184 +9,220 @@ using Dalamud.Plugin.Services;
 namespace CraftFlow.Services;
 
 /// <summary>
-/// 职业图标服务，负责加载 Companion 风格职业图标（PNG 文件）。
-/// 图标文件位于插件资源目录的 job-icons/ 子目录。
+/// 职业图标服务，负责加载 Companion 风格职业图标和角色分组图标（PNG 文件）。
+/// - 职业图标：job-icons/ 子目录（优先），失败回退到游戏内职业图标
+/// - 分组图标：role-icons/ 子目录（来自 HQHelper misc 图标集）
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
     private readonly ITextureProvider _textureProvider;
+    private readonly string _pluginDirectory;
     private readonly string _jobIconDir;
+    private readonly string _roleIconDir;
     private readonly IPluginLog _log;
-    private readonly Dictionary<uint, IDalamudTextureWrap> _iconCache = [];
-    private readonly Dictionary<uint, ImTextureID> _iconHandleCache = [];
+
+    // companion PNG 纹理缓存（SharedImmediateTexture 防止 GC）
+    private readonly Dictionary<uint, ISharedImmediateTexture> _iconSharedCache = [];
+    // 游戏图标纹理缓存
+    private readonly Dictionary<uint, IDalamudTextureWrap> _gameIconCache = [];
+    // 分组图标纹理缓存
+    private readonly Dictionary<string, ISharedImmediateTexture> _roleIconSharedCache = [];
 
     /// <summary>
     /// Companion 图标文件名映射表（ClassJobId → 文件名不含扩展名）。
-    /// 文件名格式与 HQHelper 的 public/image/game-job/companion/ 一致（小写英文名）。
     /// </summary>
     private static readonly Dictionary<uint, string> ClassJobToCompanionIcon = new()
     {
         // 防护职业
-        { 19, "paladin" },      // 骑士
-        { 21, "warrior" },       // 战士
-        { 32, "darkknight" },    // 暗黑骑士
-        { 37, "gunbreaker" },    // 绝枪战士
+        { 19, "paladin" }, { 21, "warrior" }, { 32, "darkknight" }, { 37, "gunbreaker" },
         // 治疗职业
-        { 24, "whitemage" },     // 白魔法师
-        { 28, "scholar" },        // 学者
-        { 33, "astrologian" },    // 占星术士
-        { 40, "sage" },           // 贤者
-        // 制敌DPS（枪剑师）
-        { 22, "dragoon" },        // 龙骑士
-        { 39, "reaper" },         // 钐镰客
-        // 强袭DPS（格斗家）
-        { 20, "monk" },           // 武僧
-        { 34, "samurai" },        // 武士
-        // 游击DPS（双剑师）
-        { 30, "ninja" },          // 忍者
-        { 41, "viper" },          // 蝰蛇剑士
-        // 远敏DPS（弓箭手）
-        { 23, "bard" },           // 吟游诗人
-        { 31, "machinist" },      // 机工士
-        { 38, "dancer" },         // 舞者
-        // 法系DPS（咒术师）
-        { 25, "blackmage" },      // 黑魔法师
-        { 27, "summoner" },       // 召唤师
-        { 35, "redmage" },        // 赤魔法师
-        { 42, "pictomancer" },    // 绘灵法师
-        // 能工巧匠（生产职业）
-        { 8, "carpenter" },       // 刻木匠
-        { 9, "blacksmith" },       // 锻铁匠
-        { 10, "armorer" },         // 铸甲匠
-        { 11, "goldsmith" },      // 雕金匠
-        { 12, "leatherworker" },   // 制革匠
-        { 13, "weaver" },          // 裁衣匠
-        { 14, "alchemist" },      // 炼金术士
-        { 15, "culinarian" },      // 烹调师
-        // 大地使者（采集职业）
-        { 16, "miner" },          // 采矿工
-        { 17, "botanist" },       // 园艺工
-        { 18, "fisher" },         // 捕鱼人
+        { 24, "whitemage" }, { 28, "scholar" }, { 33, "astrologian" }, { 40, "sage" },
+        // 制敌DPS
+        { 22, "dragoon" }, { 39, "reaper" },
+        // 强袭DPS
+        { 20, "monk" }, { 34, "samurai" },
+        // 游击DPS
+        { 30, "ninja" }, { 41, "viper" },
+        // 远敏DPS
+        { 23, "bard" }, { 31, "machinist" }, { 38, "dancer" },
+        // 法系DPS
+        { 25, "blackmage" }, { 27, "summoner" }, { 35, "redmage" }, { 42, "pictomancer" },
+        // 生产职业
+        { 8, "carpenter" }, { 9, "blacksmith" }, { 10, "armorer" }, { 11, "goldsmith" },
+        { 12, "leatherworker" }, { 13, "weaver" }, { 14, "alchemist" }, { 15, "culinarian" },
+        // 采集职业
+        { 16, "miner" }, { 17, "botanist" }, { 18, "fisher" },
     };
 
     /// <summary>
-    /// 初始化 JobIconService 实例。
+    /// 角色分组图标映射表（EnglishName → 文件名）。
     /// </summary>
-    /// <param name="textureProvider">纹理提供器。</param>
-    /// <param name="pluginAssemblyLocation">插件程序集路径，用于定位资源目录。</param>
-    /// <param name="log">插件日志。</param>
-    public JobIconService(ITextureProvider textureProvider, string pluginAssemblyLocation, IPluginLog log)
+    private static readonly Dictionary<string, string> RoleGroupToIconFile = new()
+    {
+        { "Tank", "clear_tank" },
+        { "Healer", "clear_healer" },
+        { "Maiming DPS", "clear_dps" },
+        { "Striking DPS", "clear_dps" },
+        { "Scouting DPS", "clear_dps" },
+        { "Ranged DPS", "clear_ranged" },
+        { "Casting DPS", "clear_dps_magic" },
+        { "Gatherer", "clear_dol" },
+        { "Crafter", "clear_doh" },
+    };
+
+    public JobIconService(ITextureProvider textureProvider, string pluginDirectory, IPluginLog log)
     {
         _textureProvider = textureProvider;
+        _pluginDirectory = pluginDirectory;
         _log = log;
 
-        // 插件 DLL 所在目录 + job-icons/
-        _jobIconDir = Path.Combine(Path.GetDirectoryName(pluginAssemblyLocation)!, "job-icons");
-        _log.Debug($"JobIconService: 图标目录 = {_jobIconDir}");
-
-        // 预检：目录是否存在
-        if (!Directory.Exists(_jobIconDir))
-        {
-            _log.Warning($"JobIconService: 图标目录不存在: {_jobIconDir}");
-        }
+        _jobIconDir = Path.Combine(pluginDirectory, "job-icons");
+        _roleIconDir = Path.Combine(pluginDirectory, "role-icons");
+        _log.Debug($"JobIconService 初始化: dir={pluginDirectory}");
+        _log.Debug($"  jobIcons: {_jobIconDir} exists={Directory.Exists(_jobIconDir)} files={(Directory.Exists(_jobIconDir) ? Directory.GetFiles(_jobIconDir, "*.png").Length : 0)}");
+        _log.Debug($"  roleIcons: {_roleIconDir} exists={Directory.Exists(_roleIconDir)} files={(Directory.Exists(_roleIconDir) ? Directory.GetFiles(_roleIconDir, "*.png").Length : 0)}");
     }
 
     /// <summary>
-    /// 获取 Companion 风格职业图标的纹理。
+    /// 获取职业图标的 ImTextureID。
+    /// 优先加载 companion PNG，失败则回退到游戏内职业图标。
     /// </summary>
-    /// <param name="classJobId">职业 ID。</param>
-    /// <returns>图标纹理，若无法加载返回 null。</returns>
-    public IDalamudTextureWrap? GetCompanionIcon(uint classJobId)
+    public ImTextureID GetJobIcon(uint classJobId)
     {
-        // 检查缓存
-        if (_iconCache.TryGetValue(classJobId, out var cached))
+        // 1. 尝试 companion PNG
+        if (ClassJobToCompanionIcon.TryGetValue(classJobId, out var fileName))
         {
-            return cached;
-        }
+            var filePath = Path.Combine(_jobIconDir, fileName + ".png");
 
-        // 查找文件名
-        if (!ClassJobToCompanionIcon.TryGetValue(classJobId, out var fileName))
-        {
-            return null;
-        }
-
-        var filePath = Path.Combine(_jobIconDir, fileName + ".png");
-        if (!File.Exists(filePath))
-        {
-            _log.Debug($"Companion 图标文件不存在: {filePath}");
-            return null;
-        }
-
-        try
-        {
-            var sharedTexture = _textureProvider.GetFromFile(filePath);
-            var iconTexture = sharedTexture.GetWrapOrDefault();
-
-            if (iconTexture is not null)
+            if (_iconSharedCache.TryGetValue(classJobId, out var cached))
             {
-                _iconCache[classJobId] = iconTexture;
-                return iconTexture;
+                var wrap = cached.GetWrapOrDefault();
+                if (wrap is not null) return wrap.Handle;
             }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"加载 Companion 图标失败 ClassJobId={classJobId} File={filePath}: {ex.Message}");
-        }
 
-        return null;
-    }
-
-    /// <summary>
-    /// 获取 Companion 风格职业图标的 ImGui 句柄。
-    /// 内部通过反射获取 ImGuiHandle（IDalamudTextureWrap 接口未暴露此属性）。
-    /// </summary>
-    /// <param name="classJobId">职业 ID。</param>
-    /// <returns>ImGui 纹理句柄，0 表示不可用。</returns>
-    public ImTextureID GetCompanionIconHandle(uint classJobId)
-    {
-        if (_iconHandleCache.TryGetValue(classJobId, out var handle))
-        {
-            return handle;
-        }
-
-        var wrap = GetCompanionIcon(classJobId);
-        if (wrap is null)
-        {
-            return 0;
-        }
-
-        // 通过反射获取 ImGuiHandle（兼容不同 Dalamud 版本）
-        try
-        {
-            var prop = wrap.GetType().GetProperty("ImGuiHandle");
-            if (prop is not null)
+            if (File.Exists(filePath))
             {
-                var value = prop.GetValue(wrap);
-                if (value is not null)
+                try
                 {
-                    var h = new ImTextureID((nint)value);
-                    _iconHandleCache[classJobId] = h;
-                    return h;
+                    var shared = _textureProvider.GetFromFile(filePath);
+                    var wrap = shared.GetWrapOrDefault();
+                    if (wrap is not null)
+                    {
+                        _iconSharedCache[classJobId] = shared;
+                        _log.Debug($"Companion 图标加载成功: ClassJobId={classJobId} file={fileName} Handle={wrap.Handle}");
+                        return wrap.Handle;
+                    }
+                    _log.Debug($"Companion 图标 wrap 为 null: {filePath}");
+                }
+                catch (Exception ex)
+                {
+                    _log.Debug($"Companion 图标加载异常: {ex.Message}");
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"获取 Companion 图标句柄失败 ClassJobId={classJobId}: {ex.Message}");
+            else
+            {
+                _log.Debug($"Companion 图标文件不存在: {filePath}");
+            }
         }
 
-        return 0;
+        // 2. 回退到游戏内图标
+        return GetGameIcon(classJobId);
     }
 
     /// <summary>
-    /// 释放所有缓存的纹理。
+    /// 获取游戏内职业图标。
     /// </summary>
+    private ImTextureID GetGameIcon(uint classJobId)
+    {
+        if (_gameIconCache.TryGetValue(classJobId, out var cached))
+            return cached.Handle;
+
+        var iconId = GetClassJobIconId(classJobId);
+        if (iconId == 0) return new ImTextureID(0);
+
+        try
+        {
+            var shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
+            var wrap = shared.GetWrapOrDefault();
+            if (wrap is not null)
+            {
+                _gameIconCache[classJobId] = wrap;
+                return wrap.Handle;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"游戏图标加载失败 ClassJobId={classJobId}: {ex.Message}");
+        }
+
+        return new ImTextureID(0);
+    }
+
+    /// <summary>
+    /// 获取角色分组图标的 ImTextureID。
+    /// </summary>
+    public ImTextureID GetRoleGroupIcon(string englishName)
+    {
+        if (_roleIconSharedCache.TryGetValue(englishName, out var cached))
+        {
+            var wrap = cached.GetWrapOrDefault();
+            if (wrap is not null) return wrap.Handle;
+        }
+
+        if (!RoleGroupToIconFile.TryGetValue(englishName, out var fileName))
+            return new ImTextureID(0);
+
+        var filePath = Path.Combine(_roleIconDir, fileName + ".png");
+
+        if (File.Exists(filePath))
+        {
+            try
+            {
+                var shared = _textureProvider.GetFromFile(filePath);
+                var wrap = shared.GetWrapOrDefault();
+                if (wrap is not null)
+                {
+                    _roleIconSharedCache[englishName] = shared;
+                    return wrap.Handle;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Debug($"分组图标加载异常: {ex.Message}");
+            }
+        }
+
+        return new ImTextureID(0);
+    }
+
+    /// <summary>
+    /// 职业图标 ID 映射（战斗职业用职业水晶，生产/采集用工具图标）。
+    /// </summary>
+    private static uint GetClassJobIconId(uint classJobId) => classJobId switch
+    {
+        // 坦克
+        19 => 62401, 21 => 62402, 32 => 62403, 37 => 62404,
+        // 治疗
+        24 => 62501, 28 => 62502, 33 => 62503, 40 => 62504,
+        // 近战/远程/法系
+        22 => 62301, 20 => 62302, 30 => 62303, 34 => 62304,
+        23 => 62305, 31 => 62306, 25 => 62307, 27 => 62308,
+        // 扩展
+        35 => 62310, 39 => 62312, 41 => 62313, 42 => 62314,
+        // 生产
+        8 => 26038, 9 => 26039, 10 => 26040, 11 => 26041,
+        12 => 26042, 13 => 26043, 14 => 26044, 15 => 26045,
+        // 采集
+        16 => 26046, 17 => 26047, 18 => 26048,
+        _ => 0,
+    };
+
     public void Dispose()
     {
-        foreach (var wrap in _iconCache.Values)
-        {
+        _iconSharedCache.Clear();
+        _roleIconSharedCache.Clear();
+        foreach (var wrap in _gameIconCache.Values)
             wrap.Dispose();
-        }
-        _iconCache.Clear();
+        _gameIconCache.Clear();
     }
 }

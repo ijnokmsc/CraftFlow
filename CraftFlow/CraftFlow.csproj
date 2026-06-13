@@ -30,6 +30,11 @@
       <JobIconFiles Include="$(ProjectDir)resources\job-icons\*.png" />
     </ItemGroup>
     <Copy SourceFiles="@(JobIconFiles)" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\job-icons\" SkipUnchangedFiles="true" />
-    <Message Importance="high" Text="已部署职业图标 ($(OutputPath))" />
+    <!-- 部署角色分组图标资源 -->
+    <ItemGroup>
+      <RoleIconFiles Include="$(ProjectDir)resources\role-icons\*.png" />
+    </ItemGroup>
+    <Copy SourceFiles="@(RoleIconFiles)" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\role-icons\" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="已部署职业图标和分组图标" />
   </Target>
 </Project>

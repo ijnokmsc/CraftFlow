@@ -93,9 +93,7 @@ public sealed class EquipmentTab
     {
         DrawVersionFilter();
         ImGui.Separator();
-        DrawRoleGroupSelector();
-        ImGui.Separator();
-        DrawClassJobSelector();
+        DrawJobSelector();
         ImGui.Separator();
         DrawQuickAddButtons();
         ImGui.Separator();
@@ -283,107 +281,107 @@ public sealed class EquipmentTab
     }
 
     /// <summary>
-    /// 绘制角色分组按钮区（3列×3行网格布局）。
+    /// 绘制角色分组 + 职业图标选择器（参考 HQHelper JobPanel 风格）。
+    /// 每个角色分组一行：[分组图标] 职业图标按钮×N。
     /// </summary>
-    private void DrawRoleGroupSelector()
+    private void DrawJobSelector()
     {
-        ImGui.Text("角色分组:");
         var groups = RoleGroupDefinitions.RoleGroups;
+        var iconSize = new Vector2(26, 26);
 
-        for (int i = 0; i < groups.Length; i++)
+        for (int gi = 0; gi < groups.Length; gi++)
         {
-            if (i > 0 && i % 3 != 0) ImGui.SameLine();
-            if (i > 0 && i % 3 == 0) ImGui.NewLine();
+            var group = groups[gi];
+            var isGroupActive = _selectedRoleGroup == group;
 
-            bool isSelected = _selectedRoleGroup == groups[i];
-            if (isSelected)
+            ImGui.PushID($"Group_{gi}");
+
+            // 分组图标（16×16）
+            var roleIcon = _jobIconService.GetRoleGroupIcon(group.EnglishName);
+            if (roleIcon.Handle != 0)
             {
-                ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.3f, 0.5f, 0.8f, 1.0f));
+                ImGui.Image(roleIcon, new Vector2(16, 16));
+                ImGui.SameLine(0, 4);
             }
 
-            if (ImGui.Button($"{groups[i].DisplayName}###RoleGroup_{i}"))
+            // 分组名称标签
+            var labelColor = isGroupActive
+                ? new Vector4(0.4f, 0.8f, 1.0f, 1.0f)
+                : new Vector4(0.7f, 0.7f, 0.7f, 1.0f);
+            ImGui.TextColored(labelColor, group.DisplayName);
+            ImGui.SameLine(0, 6);
+
+            // 每个职业一个图标按钮
+            for (int ji = 0; ji < group.Jobs.Length; ji++)
             {
-                _selectedRoleGroup = groups[i];
-                _selectedClassJobId = 0;
-                if (groups[i].Jobs.Length > 0)
+                var job = group.Jobs[ji];
+                var isJobSelected = _selectedClassJobId == job.ClassJobId;
+
+                ImGui.PushID($"Job_{job.ClassJobId}");
+
+                if (isJobSelected)
                 {
-                    _selectedClassJobId = groups[i].Jobs[0].ClassJobId;
+                    ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 2.0f);
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.25f, 0.45f, 0.75f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.35f, 0.55f, 0.85f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.3f, 1.0f, 0.3f, 1.0f));
                 }
 
-                // 自动选择当前职业分组的最佳装备版本
-                AutoSelectBestVersion(groups[i]);
-                RefreshEquipmentList();
+                var jobIcon = _jobIconService.GetJobIcon(job.ClassJobId);
+                bool clicked;
+                if (jobIcon.Handle != 0)
+                {
+                    clicked = ImGui.ImageButton(jobIcon, iconSize);
+                }
+                else
+                {
+                    clicked = ImGui.Button($"{job.Name[0]}###FallbackJob_{job.ClassJobId}", iconSize);
+                }
+
+                if (clicked)
+                    SelectJob(job.ClassJobId);
+
+                if (isJobSelected)
+                {
+                    ImGui.PopStyleVar();
+                    ImGui.PopStyleColor(3);
+                }
+
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(job.Name);
+
+                ImGui.PopID();
+
+                if (ji < group.Jobs.Length - 1)
+                    ImGui.SameLine(0, 2);
             }
 
-            if (isSelected)
-            {
-                ImGui.PopStyleColor();
-            }
+            ImGui.PopID();
         }
     }
 
     /// <summary>
-    /// 绘制职业列表（选中分组后展开），包含职业图标。
+    /// 选择角色分组（不改变当前职业）。
     /// </summary>
-    private void DrawClassJobSelector()
+    private void SelectRoleGroup(RoleGroup group)
     {
-        if (_selectedRoleGroup is null)
+        _selectedRoleGroup = group;
+        if (group.Jobs.Length > 0 && !group.Jobs.Any(j => j.ClassJobId == _selectedClassJobId))
         {
-            ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.5f, 0.5f, 1f), "请先选择角色分组");
-            return;
+            _selectedClassJobId = group.Jobs[0].ClassJobId;
         }
 
-        ImGui.Text($"职业列表 ({_selectedRoleGroup.DisplayName}):");
+        AutoSelectBestVersion(group);
+        RefreshEquipmentList();
+    }
 
-        foreach (var job in _selectedRoleGroup.Jobs)
-        {
-            bool isSelected = _selectedClassJobId == job.ClassJobId;
-            if (isSelected)
-            {
-                ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.2f, 0.9f, 0.2f, 1f));
-            }
-
-            // 显示职业图标（Companion 风格，回退到游戏内图标）
-            var iconHandle = _jobIconService.GetCompanionIconHandle(job.ClassJobId);
-            if (iconHandle == 0)
-            {
-                // 回退：使用游戏内职业图标
-                var fallbackWrap = _equipRepo.GetClassJobIconTexture(job.ClassJobId);
-                if (fallbackWrap is not null)
-                {
-                    var prop = fallbackWrap.GetType().GetProperty("ImGuiHandle");
-                    if (prop is not null)
-                    {
-                        var val = prop.GetValue(fallbackWrap);
-                        if (val is not null) iconHandle = new Dalamud.Bindings.ImGui.ImTextureID((nint)val);
-                    }
-                }
-            }
-
-            if (iconHandle != 0)
-            {
-                var imageSize = new System.Numerics.Vector2(24, 24);
-                ImGui.Image(iconHandle, imageSize);
-                ImGui.SameLine();
-            }
-            else
-            {
-                // 图标不可用，使用彩色标识替代
-                ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
-                ImGui.SameLine();
-            }
-
-            if (ImGui.Selectable($"  {job.Name}###Job_{job.ClassJobId}", isSelected))
-            {
-                _selectedClassJobId = job.ClassJobId;
-                RefreshEquipmentList();
-            }
-
-            if (isSelected)
-            {
-                ImGui.PopStyleColor();
-            }
-        }
+    /// <summary>
+    /// 选择职业并刷新装备列表。
+    /// </summary>
+    private void SelectJob(uint classJobId)
+    {
+        _selectedClassJobId = classJobId;
+        RefreshEquipmentList();
     }
 
     /// <summary>
