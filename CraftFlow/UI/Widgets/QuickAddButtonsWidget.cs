@@ -9,80 +9,60 @@ namespace CraftFlow.UI.Widgets;
 
 /// <summary>
 /// 一键添加按钮组组件。
-/// 提供 5 种快捷按钮：主副手、防具、首饰、防具+首饰、整套。
-/// 点击后调用 EquipmentSetService 对应方法，通过回调通知 EquipmentTab。
+/// 5 个快捷按钮压缩到一排，使用短标签 + 间距区分。
 /// </summary>
 public sealed class QuickAddButtonsWidget
 {
     private readonly EquipmentSetService _setService;
     private readonly IPluginLog _log;
 
-    /// <summary>
-    /// 初始化 QuickAddButtonsWidget 实例。
-    /// </summary>
-    /// <param name="setService">装备套装服务。</param>
-    /// <param name="log">插件日志。</param>
     public QuickAddButtonsWidget(EquipmentSetService setService, IPluginLog log)
     {
         _setService = setService;
         _log = log;
     }
 
-    /// <summary>
-    /// 绘制一键添加按钮组。
-    /// </summary>
-    /// <param name="roleGroup">当前选中的角色分组（null 时按钮禁用）。</param>
-    /// <param name="classJobId">当前选中的职业 ID。</param>
-    /// <param name="patchVersion">当前版本筛选（null 表示不筛选）。</param>
-    /// <param name="onAdded">添加完成后的回调，参数为新增的 CraftTarget 列表。</param>
     public void Draw(RoleGroup? roleGroup, uint classJobId, int? patchVersion, Action<List<CraftTarget>> onAdded)
     {
-        ImGui.TextColored(new System.Numerics.Vector4(0.7f, 0.85f, 1.0f, 1.0f), "一键添加:");
-        ImGui.Separator();
-
-        // 如果未选中角色分组，禁用所有按钮
         bool disabled = roleGroup is null;
         if (disabled)
-        {
             ImGui.BeginDisabled();
-        }
 
-        // 按钮定义：(显示名称, AddSlotType)
-        var buttons = new (string Label, AddSlotType Type)[]
+        var buttons = new (string Label, AddSlotType Type, string Tooltip)[]
         {
-            ("主副手###QuickAdd_Weapon", AddSlotType.WeaponOnly),
-            ("防具###QuickAdd_Armor", AddSlotType.ArmorOnly),
-            ("首饰###QuickAdd_Accessory", AddSlotType.AccessoryOnly),
-            ("防具+首饰###QuickAdd_ArmorAccessory", AddSlotType.ArmorAndAccessory),
-            ("整套###QuickAdd_FullSet", AddSlotType.FullSet),
+            ("武器", AddSlotType.WeaponOnly, "添加主副手武器"),
+            ("防具", AddSlotType.ArmorOnly, "添加全部防具"),
+            ("首饰", AddSlotType.AccessoryOnly, "添加全部首饰"),
+            ("防+首", AddSlotType.ArmorAndAccessory, "添加防具+首饰"),
+            ("整套", AddSlotType.FullSet, "添加全部装备"),
         };
 
         for (int i = 0; i < buttons.Length; i++)
         {
-            if (i > 0 && i % 3 != 0) ImGui.SameLine();
-            if (i == 3) ImGui.NewLine();
-
-            if (ImGui.Button(buttons[i].Label))
+            var btn = buttons[i];
+            if (ImGui.Button($"{btn.Label}###QA_{btn.Type}"))
             {
                 if (roleGroup is not null)
                 {
-                    var targets = _setService.AddByType(roleGroup, classJobId, buttons[i].Type, 1, patchVersion);
+                    var targets = _setService.AddByType(roleGroup, classJobId, btn.Type, 1, patchVersion);
                     if (targets.Count > 0)
                     {
                         onAdded(targets);
-                        _log.Information($"一键添加 {buttons[i].Type}: {targets.Count} 件装备");
+                        _log.Information($"一键添加 {btn.Type}: {targets.Count} 件装备");
                     }
                     else
                     {
-                        _log.Warning($"一键添加 {buttons[i].Type}: 未找到匹配装备");
+                        _log.Warning($"一键添加 {btn.Type}: 未找到匹配装备");
                     }
                 }
             }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(btn.Tooltip);
+            if (i < buttons.Length - 1)
+                ImGui.SameLine();
         }
 
         if (disabled)
-        {
             ImGui.EndDisabled();
-        }
     }
 }
