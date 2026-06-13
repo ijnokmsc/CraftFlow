@@ -25,6 +25,11 @@
     <MakeDir Directories="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" />
     <Copy SourceFiles="$(OutputPath)CraftFlow.dll" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(OutputPath)CraftFlow.json" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" Condition="Exists('$(OutputPath)CraftFlow.json')" />
-    <Message Importance="high" Text="已部署到 devPlugins: $(OutputPath)" />
+    <!-- 部署职业图标资源 -->
+    <ItemGroup>
+      <JobIconFiles Include="$(ProjectDir)resources\job-icons\*.png" />
+    </ItemGroup>
+    <Copy SourceFiles="@(JobIconFiles)" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\job-icons\" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="已部署职业图标 ($(OutputPath))" />
   </Target>
 </Project>

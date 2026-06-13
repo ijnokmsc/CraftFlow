@@ -44,6 +44,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfig _config;
     private readonly CraftProgressManager _progressManager;
     private readonly CraftProgressWindow _craftProgressWindow;
+    private readonly JobIconService _jobIconService;
     private readonly MainWindow _mainWindow;
     private readonly WindowSystem _windowSystem;
     private readonly Action _openMainUiHandler;
@@ -85,6 +86,10 @@ public sealed class Plugin : IDalamudPlugin
         // 制作进度管理器（从 MainWindow 中提升）
         _progressManager = new CraftProgressManager(_config, Log);
 
+        // 职业图标服务（Companion 风格）
+        var pluginDir = Path.GetDirectoryName(PluginInterface.AssemblyLocation.FullName)!;
+        _jobIconService = new JobIconService(TextureProvider, pluginDir, Log);
+
         // 进度弹窗（在 MainWindow 之前创建，因为 MainWindow 需要引用它）
         _craftProgressWindow = new CraftProgressWindow(_progressManager, _artisanIpc, Log);
 
@@ -104,6 +109,7 @@ public sealed class Plugin : IDalamudPlugin
             _ipcChecker,
             _progressManager,
             _craftProgressWindow,
+            _jobIconService,
             Log
         );
         // CraftingEnded 在 _mainWindow 赋值后再订阅，避免 CS8602 空引用警告
@@ -213,6 +219,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= _openMainUiHandler;
         PluginInterface.UiBuilder.OpenConfigUi -= _openConfigUiHandler;
         _craftProgressWindow.CraftingEnded -= _craftingEndedHandler;
+        _jobIconService.Dispose();
         _artisanIpc.Dispose();
         _gbrIpc.Dispose();
         Log.Information("CraftFlow 插件已卸载");

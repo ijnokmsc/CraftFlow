@@ -30,6 +30,7 @@ public sealed class EquipmentTab
     private readonly QuickAddButtonsWidget _quickAddWidget;
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
+    private readonly JobIconService _jobIconService;
 
     // 选中状态
     private RoleGroup? _selectedRoleGroup;
@@ -65,7 +66,8 @@ public sealed class EquipmentTab
         RecipeRepository recipeRepo,
         MaterialListWidget materialListWidget,
         PluginConfig config,
-        IPluginLog log)
+        IPluginLog log,
+        JobIconService jobIconService)
     {
         _equipRepo = equipRepo;
         _setService = setService;
@@ -78,6 +80,7 @@ public sealed class EquipmentTab
         _quickAddWidget = new QuickAddButtonsWidget(setService, log);
         _config = config;
         _log = log;
+        _jobIconService = jobIconService;
 
         // 默认版本：0 表示全部，初始化时将延迟设置到最新版本
         _versionFilter = 0;
@@ -340,39 +343,34 @@ public sealed class EquipmentTab
                 ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.2f, 0.9f, 0.2f, 1f));
             }
 
-            // 显示职业图标（使用图标纹理或彩色标识）
-            var iconTexture = _equipRepo.GetClassJobIconTexture(job.ClassJobId);
-            if (iconTexture is not null)
+            // 显示职业图标（Companion 风格，回退到游戏内图标）
+            var iconHandle = _jobIconService.GetCompanionIconHandle(job.ClassJobId);
+            if (iconHandle == 0)
             {
-                // 尝试通过 ImGuiHandle 渲染图标（部分 Dalamud 版本支持）
-                try
+                // 回退：使用游戏内职业图标
+                var fallbackWrap = _equipRepo.GetClassJobIconTexture(job.ClassJobId);
+                if (fallbackWrap is not null)
                 {
-                    var handle = iconTexture.GetType().GetProperty("ImGuiHandle")?.GetValue(iconTexture);
-                    if (handle is not null)
+                    var prop = fallbackWrap.GetType().GetProperty("ImGuiHandle");
+                    if (prop is not null)
                     {
-                        // 动态调用 ImGui.Image(handle, size) — 兼容不同 Dalamud 版本
-                        var imageSize = new System.Numerics.Vector2(20, 20);
-                        var imageMethod = typeof(Dalamud.Bindings.ImGui.ImGui).GetMethod("Image",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
-                            null,
-                            [handle.GetType(), typeof(System.Numerics.Vector2)],
-                            null);
-                        imageMethod?.Invoke(null, [handle, imageSize]);
-                        ImGui.SameLine();
-                    }
-                    else
-                    {
-                        // ImGuiHandle 不可用，使用彩色标识替代
-                        ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
-                        ImGui.SameLine();
+                        var val = prop.GetValue(fallbackWrap);
+                        if (val is not null) iconHandle = new Dalamud.Bindings.ImGui.ImTextureID((nint)val);
                     }
                 }
-                catch
-                {
-                    // 渲染失败，使用彩色标识替代
-                    ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
-                    ImGui.SameLine();
-                }
+            }
+
+            if (iconHandle != 0)
+            {
+                var imageSize = new System.Numerics.Vector2(24, 24);
+                ImGui.Image(iconHandle, imageSize);
+                ImGui.SameLine();
+            }
+            else
+            {
+                // 图标不可用，使用彩色标识替代
+                ImGui.TextColored(new System.Numerics.Vector4(0.3f, 0.7f, 1.0f, 1f), "●");
+                ImGui.SameLine();
             }
 
             if (ImGui.Selectable($"  {job.Name}###Job_{job.ClassJobId}", isSelected))

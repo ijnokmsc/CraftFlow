@@ -37,6 +37,7 @@ public sealed class MainWindow : Window
     private readonly CraftProgressManager _progressManager;
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly StatusBarWidget _statusBar;
+    private readonly JobIconService _jobIconService;
 
     private TabType _currentTab = TabType.Equipment;
 
@@ -55,6 +56,7 @@ public sealed class MainWindow : Window
         IpcAvailabilityChecker ipcChecker,
         CraftProgressManager progressManager,
         CraftProgressWindow craftProgressWindow,
+        JobIconService jobIconService,
         IPluginLog log)
         : base("CraftFlow###CraftFlowMainWindow")
     {
@@ -73,6 +75,7 @@ public sealed class MainWindow : Window
         _progressManager = progressManager;
         _craftProgressWindow = craftProgressWindow;
         _log = log;
+        _jobIconService = jobIconService;
 
         var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, log);
         // 设置制作开始回调：显示进度窗口，隐藏主窗口
@@ -84,7 +87,7 @@ public sealed class MainWindow : Window
 
         _equipmentTab = new EquipmentTab(
             equipRepo, equipSetService, bomExpander, materialAggregator, craftOrderCalculator,
-            recipeRepo, materialListWidget, config, log);
+            recipeRepo, materialListWidget, config, log, _jobIconService);
 
         _consumableTab = new ConsumableTab(
             bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
