@@ -25,7 +25,7 @@ FF14（最终幻想XIV）Dalamud 生产辅助插件，面向国服 XIVLauncherCN
 ## 编译
 
 ```bash
-git clone https://github.com/你的用户名/CraftFlow.git
+git clone https://github.com/ijnokmsc/CraftFlow.git
 cd CraftFlow/CraftFlow
 dotnet build
 ```
@@ -39,10 +39,29 @@ C:\Users\你的用户名\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\
 
 ## 安装到游戏
 
-1. 启动国服 FF14（通过 XIVLauncherCN）
-2. 打开 Dalamud 设置 → 开发者插件
-3. 勾选 CraftFlow
-4. 输入 `/craftflow` 或 `/cf` 打开主窗口
+### 方式一：插件仓库（推荐）
+
+1. 打开游戏，输入 `/xlsettings`
+2. 左侧菜单 → **插件仓库** → **添加仓库**
+3. 粘贴以下地址：
+   ```
+   https://raw.githubusercontent.com/ijnokmsc/CraftFlow/main/repo.json
+   ```
+4. 确定 → 重新整理插件列表
+5. 搜索 **CraftFlow** → 安装
+
+### 方式二：手动安装
+
+1. 从 [Releases](https://github.com/ijnokmsc/CraftFlow/releases/latest) 下载 `latest.zip`
+2. 解压到 `%APPDATA%\XIVLauncherCN\devPlugins\CraftFlow\`
+3. 游戏内 `/xlplugins` → 开发者插件 → 刷新并启用
+
+### 使用命令
+
+| 命令 | 说明 |
+|------|------|
+| `/cf` | 打开/关闭主窗口 |
+| `/craftflow` | 同上（完整命令） |
 
 ## 项目结构
 

@@ -11,6 +11,7 @@ namespace CraftFlow.Commands;
 public sealed class PluginCommands : IDisposable
 {
     private const string CommandName = "/craftflow";
+    private const string CommandAlias = "/cf";
     private readonly ICommandManager _commandManager;
     private readonly MainWindow _mainWindow;
     private readonly IPluginLog _log;
@@ -31,8 +32,12 @@ public sealed class PluginCommands : IDisposable
         {
             HelpMessage = "打开/关闭 CraftFlow 生产辅助窗口"
         });
+        _commandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "打开/关闭 CraftFlow 生产辅助窗口"
+        });
 
-        _log.Debug("已注册 /craftflow 命令");
+        _log.Debug("已注册 /craftflow /cf 命令");
     }
 
     /// <summary>
@@ -50,6 +55,7 @@ public sealed class PluginCommands : IDisposable
     public void Dispose()
     {
         _commandManager.RemoveHandler(CommandName);
-        _log.Debug("已注销 /craftflow 命令");
+        _commandManager.RemoveHandler(CommandAlias);
+        _log.Debug("已注销 /craftflow /cf 命令");
     }
 }
