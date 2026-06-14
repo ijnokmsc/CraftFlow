@@ -86,8 +86,11 @@ public sealed class Plugin : IDalamudPlugin
         // 制作进度管理器（从 MainWindow 中提升）
         _progressManager = new CraftProgressManager(_config, Log);
 
-        // 职业图标服务（纯游戏图标，委托 EquipmentRepository 获取正确图标 ID）
-        _jobIconService = new JobIconService(TextureProvider, _equipRepo, Log);
+        // 职业图标服务（外部 PNG 文件）
+        // API 15: PluginInterface.AssemblyLocation → 插件 DLL 路径 → 其所在目录即为插件目录
+        var pluginDir = Path.GetDirectoryName(PluginInterface.AssemblyLocation.FullName) ?? "";
+        Log.Information($"[CraftFlow] PluginDirectory={pluginDir}");
+        _jobIconService = new JobIconService(TextureProvider, pluginDir, Log);
 
         // 进度弹窗（在 MainWindow 之前创建，因为 MainWindow 需要引用它）
         _craftProgressWindow = new CraftProgressWindow(_progressManager, _artisanIpc, Log);

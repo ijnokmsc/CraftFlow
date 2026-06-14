@@ -481,33 +481,47 @@ public sealed class EquipmentRepository
 
         _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal.RowId={soulCrystalRowId} ItemStartingWeaponMainHand.RowId={weaponRowId}");
 
-        // 路径1：ClassJob.ItemSoulCrystal → Item.Icon（战斗职业有灵魂水晶）
-        if (soulCrystalRowId > 0)
+        // 优先尝试通过反射读取 ClassJob 的 Icon 字段（Lumina 自动生成的 struct 可能未暴露此字段）
+        // FFXIV ClassJob Excel 表有 Icon 列，存储职业在 UI 中显示的图标 ID
+        try
         {
-            try
+            var iconProp = typeof(ClassJob).GetProperty("Icon");
+            if (iconProp is not null)
             {
-                // 主动触发 ItemSheet 加载（Lumina 惰性 RowRef 解析）
-                if (_cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
+                var iconVal = iconProp.GetValue(classJob);
+                if (iconVal is uint u && u > 0)
                 {
-                    var iconId = (uint)soulCrystalItem.Icon;
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} soulCrystalItem.Icon={iconId} (ushort→uint)");
-                    if (iconId > 0)
-                    {
-                        return iconId;
-                    }
+                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon={u}");
+                    return u;
                 }
-                else
+                if (iconVal is int i && i > 0)
                 {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal RowId={soulCrystalRowId} 不在 ItemSheet 中");
+                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon(int)={i}");
+                    return (uint)i;
+                }
+                if (iconVal is ushort us && us > 0)
+                {
+                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon(ushort)={us}");
+                    return us;
                 }
             }
-            catch (Exception ex)
+            else
             {
-                _log.Debug($"[GetClassJobIcon] ItemSoulCrystal 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
+                // 打印 ClassJob 的所有属性名，帮助定位 Icon 字段的正确名称
+                var allProps = typeof(ClassJob).GetProperties().Select(p => p.Name).ToArray();
+                _log.Debug($"[GetClassJobIcon] ClassJob 无 Icon 属性，所有属性: [{string.Join(", ", allProps)}]");
+                // 同时检查 Field（Lumina 有时用字段而非属性）
+                var allFields = typeof(ClassJob).GetFields().Select(f => $"{f.Name}:{f.FieldType.Name}").ToArray();
+                _log.Debug($"[GetClassJobIcon] ClassJob 所有字段: [{string.Join(", ", allFields)}]");
             }
         }
+        catch (Exception ex)
+        {
+            _log.Debug($"[GetClassJobIcon] 反射读取 Icon 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
+        }
 
-        // 路径2：ClassJob.ItemStartingWeaponMainHand → Item.Icon（生产/采集用主手工具图标）
+        // 路径1：ClassJob.ItemStartingWeaponMainHand → Item.Icon（职业起始武器/工具的图标 = 职业图标）
+        // 注：ItemSoulCrystal 的图标是水晶，不是职业图标，因此放到路径2作为回退
         if (weaponRowId > 0)
         {
             try
@@ -529,6 +543,31 @@ public sealed class EquipmentRepository
             catch (Exception ex)
             {
                 _log.Debug($"[GetClassJobIcon] ItemStartingWeaponMainHand 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        // 路径2：ClassJob.ItemSoulCrystal → Item.Icon（战斗职业的灵魂水晶，仅作为回退）
+        if (soulCrystalRowId > 0)
+        {
+            try
+            {
+                if (_cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
+                {
+                    var iconId = (uint)soulCrystalItem.Icon;
+                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} soulCrystalItem.Icon={iconId} (ushort→uint, 回退路径)");
+                    if (iconId > 0)
+                    {
+                        return iconId;
+                    }
+                }
+                else
+                {
+                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal RowId={soulCrystalRowId} 不在 ItemSheet 中");
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Debug($"[GetClassJobIcon] ItemSoulCrystal 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
             }
         }
 

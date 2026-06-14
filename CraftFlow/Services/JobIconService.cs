@@ -1,168 +1,205 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
+using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Plugin.Services;
-using CraftFlow.Data.GameData;
-using CraftFlow.Data.Models;
 
 namespace CraftFlow.Services;
 
 /// <summary>
-/// 职业图标服务，严格参考 WrathCombo Icons.cs 实现。
-/// 使用 GetFromFile(path) 方式加载图标（非 GetFromGameIcon）。
+/// 职业图标服务：从外部 PNG 文件加载职业/分组图标纹理。
+/// PNG 文件存放在 pluginDirectory/job-icons/ 和 pluginDirectory/role-icons/ 目录下。
+/// 正确做法：缓存 ISharedImmediateTexture（维持引用），每帧通过 GetWrapOrDefault() 获取 wrap。
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
     private readonly ITextureProvider _textureProvider;
-    private readonly EquipmentRepository _equipRepo;
+    private readonly string _jobIconsDir;
+    private readonly string _roleIconsDir;
     private readonly IPluginLog _log;
 
-    // 缓存：只存 ISharedImmediateTexture，每次 Draw 时 GetWrapOrDefault()
-    private readonly Dictionary<uint, ISharedImmediateTexture> _iconSharedCache = [];
-    private readonly Dictionary<string, ISharedImmediateTexture> _roleIconSharedCache = [];
+    // 缓存 ISharedImmediateTexture（维持引用，让 Dalamud 管理异步加载生命周期）
+    private readonly Dictionary<uint, ISharedImmediateTexture> _jobSharedCache = new();
+    private readonly Dictionary<string, ISharedImmediateTexture> _roleSharedCache = new();
 
     /// <summary>
-    /// 战斗角色分组专用图标 ID（来源 WrathCombo Role.IconID + offset）。
+    /// ClassJobId → 文件名（不含扩展名，对应 job-icons/*.png）。
     /// </summary>
-    private static readonly Dictionary<string, uint> CombatRoleIconIds = new()
+    private static readonly Dictionary<uint, string> JobIconFileNames = new()
     {
-        { "Tank", 62581 },         // RoleBaseIconID + 1
-        { "Healer", 62582 },       // RoleBaseIconID + 2
-        { "Maiming DPS", 62584 },  // Melee (RoleBaseIconID + 4)
-        { "Striking DPS", 62583 },
-        { "Scouting DPS", 62585 },
-        { "Ranged DPS", 62586 },   // RoleBaseIconID + 6
-        { "Casting DPS", 62587 },  // Magic (RoleBaseIconID + 7)
+        { 8,  "carpenter" },      // 刻木匠 CRP
+        { 9,  "blacksmith" },     // 锻铁匠 BSM
+        { 10, "armorer" },       // 铸甲匠 ARM
+        { 11, "goldsmith" },     // 雕金匠 GSM
+        { 12, "leatherworker" }, // 制革匠 LTW
+        { 13, "weaver" },        // 裁衣匠 WVR
+        { 14, "alchemist" },     // 炼金术士 ALC
+        { 15, "culinarian" },    // 烹调师 CUL
+        { 16, "miner" },         // 采矿工 MIN
+        { 17, "botanist" },      // 园艺工 BTN
+        { 18, "fisher" },        // 捕鱼人 FSH
+        { 19, "paladin" },       // 骑士 PLD
+        { 20, "monk" },          // 武僧 MNK
+        { 21, "warrior" },       // 战士 WAR
+        { 22, "dragoon" },       // 龙骑士 DRG
+        { 23, "bard" },          // 吟游诗人 BRD
+        { 24, "whitemage" },     // 白魔法师 WHM
+        { 25, "blackmage" },     // 黑魔法师 BLM
+        { 27, "summoner" },      // 召唤师 SMN
+        { 28, "scholar" },       // 学者 SCH
+        { 30, "ninja" },         // 忍者 NIN
+        { 31, "machinist" },     // 机工士 MCH
+        { 32, "darkknight" },    // 暗黑骑士 DRK
+        { 33, "astrologian" },   // 占星术士 AST
+        { 34, "samurai" },       // 武士 SAM
+        { 35, "redmage" },       // 赤魔法师 RDM
+        { 36, "bluemage" },      // 青魔法师 BLU
+        { 37, "gunbreaker" },    // 绝枪战士 GNB
+        { 38, "dancer" },        // 舞者 DNC
+        { 39, "reaper" },        // 钐镰客 RPR
+        { 40, "sage" },          // 贤者 SGE
+        { 41, "viper" },         // 蝰蛇剑士 VPR
+        { 42, "pictomancer" },   // 绘灵法师 PCT
     };
 
     /// <summary>
-    /// 生产/采集分组使用第一个职业的图标。
+    /// 分组英文名 → 角色图标文件名（对应 role-icons/*.png）。
     /// </summary>
-    private static readonly Dictionary<string, uint> DoHDoLRoleFirstJob = new()
+    private static readonly Dictionary<string, string> RoleIconFileNames = new()
     {
-        { "Crafter", 8 },   // 刻木匠
-        { "Gatherer", 16 }, // 采矿工
+        { "Tank",           "clear_tank" },
+        { "Healer",         "clear_healer" },
+        { "Maiming DPS",   "clear_dps" },
+        { "Striking DPS",  "clear_dps" },
+        { "Scouting DPS",   "clear_dps" },
+        { "Ranged DPS",    "clear_ranged" },
+        { "Casting DPS",   "clear_dps_magic" },
+        { "Gatherer",       "clear_dol" },
+        { "Crafter",        "clear_doh" },
     };
 
-    public JobIconService(ITextureProvider textureProvider, EquipmentRepository equipRepo, IPluginLog log)
+    public JobIconService(ITextureProvider textureProvider, string pluginDirectory, IPluginLog log)
     {
         _textureProvider = textureProvider;
-        _equipRepo = equipRepo;
+        _jobIconsDir  = Path.Combine(pluginDirectory, "job-icons");
+        _roleIconsDir = Path.Combine(pluginDirectory, "role-icons");
         _log = log;
+
+        _log.Information($"[JobIconService] 初始化 pluginDir={pluginDirectory}");
+        _log.Information($"[JobIconService] jobIconsDir={_jobIconsDir} exists={Directory.Exists(_jobIconsDir)}");
+        _log.Information($"[JobIconService] roleIconsDir={_roleIconsDir} exists={Directory.Exists(_roleIconsDir)}");
+        if (Directory.Exists(_jobIconsDir))
+            _log.Information($"[JobIconService] job-icons 文件数={Directory.GetFiles(_jobIconsDir, "*.png").Length}");
+        if (Directory.Exists(_roleIconsDir))
+            _log.Information($"[JobIconService] role-icons 文件数={Directory.GetFiles(_roleIconsDir, "*.png").Length}");
     }
 
     /// <summary>
-    /// 获取职业图标（参考 WrathCombo GetTextureFromIconId 方式）。
-    /// 使用 GetFromFile(path) 而非 GetFromGameIcon。
+    /// 获取职业图标纹理 ID。若纹理尚未加载完成返回 0，下一帧重试。
     /// </summary>
     public ImTextureID GetJobIcon(uint classJobId)
     {
+        if (classJobId == 0)
+            return new ImTextureID(0);
+
         try
         {
-            if (!_iconSharedCache.TryGetValue(classJobId, out var shared))
+            // 确保 ISharedImmediateTexture 已创建（只创建一次）
+            if (!_jobSharedCache.TryGetValue(classJobId, out var shared))
             {
-                var iconId = _equipRepo.GetClassJobIcon(classJobId);
-                if (iconId == 0)
-                {
-                    _log.Warning($"职业图标ID为0 ClassJobId={classJobId}");
+                shared = CreateJobShared(classJobId);
+                if (shared == null)
                     return new ImTextureID(0);
-                }
-
-                _log.Debug($"加载职业图标 ClassJobId={classJobId} IconId={iconId}");
-                shared = LoadIconTexture(iconId);
-                if (shared is null) return new ImTextureID(0);
-                _iconSharedCache[classJobId] = shared;
+                _jobSharedCache[classJobId] = shared;
             }
 
+            // 每帧通过 shared 获取 wrap；纹理加载完成后 GetWrapOrDefault() 返回非 null
             var wrap = shared.GetWrapOrDefault();
-            if (wrap is not null) return wrap.Handle;
-        }
-        catch (ObjectDisposedException)
-        {
-            _iconSharedCache.Remove(classJobId);
+            if (wrap == null)
+                return new ImTextureID(0);
+
+            return wrap.Handle;
         }
         catch (Exception ex)
         {
-            _log.Debug($"图标加载异常 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"职业图标获取异常 ClassJobId={classJobId}: {ex.Message}");
+            return new ImTextureID(0);
         }
-
-        return new ImTextureID(0);
     }
 
     /// <summary>
-    /// 获取角色分组图标。
+    /// 获取角色分组图标纹理 ID。
     /// </summary>
     public ImTextureID GetRoleGroupIcon(string englishName)
     {
         try
         {
-            if (!_roleIconSharedCache.TryGetValue(englishName, out var shared))
+            if (!_roleSharedCache.TryGetValue(englishName, out var shared))
             {
-                uint iconId;
-
-                // 战斗角色：使用专用角色图标
-                if (CombatRoleIconIds.TryGetValue(englishName, out var combatIconId))
-                {
-                    iconId = combatIconId;
-                }
-                // 生产/采集：使用第一个职业的图标
-                else if (DoHDoLRoleFirstJob.TryGetValue(englishName, out var firstJobId))
-                {
-                    iconId = _equipRepo.GetClassJobIcon(firstJobId);
-                }
-                else
-                {
+                shared = CreateRoleShared(englishName);
+                if (shared == null)
                     return new ImTextureID(0);
-                }
-
-                if (iconId == 0) return new ImTextureID(0);
-
-                _log.Debug($"加载分组图标 {englishName} IconId={iconId}");
-                shared = LoadIconTexture(iconId);
-                if (shared is null) return new ImTextureID(0);
-                _roleIconSharedCache[englishName] = shared;
+                _roleSharedCache[englishName] = shared;
             }
 
             var wrap = shared.GetWrapOrDefault();
-            if (wrap is not null) return wrap.Handle;
-        }
-        catch (ObjectDisposedException)
-        {
-            _roleIconSharedCache.Remove(englishName);
+            if (wrap == null)
+                return new ImTextureID(0);
+
+            return wrap.Handle;
         }
         catch (Exception ex)
         {
-            _log.Debug($"分组图标异常 {englishName}: {ex.Message}");
+            _log.Debug($"分组图标获取异常 {englishName}: {ex.Message}");
+            return new ImTextureID(0);
         }
-
-        return new ImTextureID(0);
     }
 
-    /// <summary>
-    /// 加载图标纹理（参考 WrathCombo GetTextureFromIconId 方式）。
-    /// 使用 GetFromFile(path) 而非 GetFromGameIcon。
-    /// </summary>
-    private ISharedImmediateTexture? LoadIconTexture(uint iconId)
+    private ISharedImmediateTexture? CreateJobShared(uint classJobId)
     {
-        try
+        if (!JobIconFileNames.TryGetValue(classJobId, out var fileName))
         {
-            // 参考 WrathCombo：GameIconLookup(iconId, false, true)
-            var lookup = new GameIconLookup(iconId, false, true);
-            
-            // 方式1：直接用 GetFromGameIcon（WrathCombo 的 fallback 路径）
-            // 注：WrathCombo 主路径是 GetFromFile(resolvedPath)，但 GetFromGameIcon 也应该能用
-            var shared = _textureProvider.GetFromGameIcon(lookup);
-            return shared;
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"LoadIconTexture 失败 IconId={iconId}: {ex.Message}");
+            _log.Debug($"未找到职业图标映射 ClassJobId={classJobId}");
             return null;
         }
+
+        var path = Path.Combine(_jobIconsDir, $"{fileName}.png");
+        if (!File.Exists(path))
+        {
+            _log.Debug($"职业图标文件不存在: {path}");
+            return null;
+        }
+
+        _log.Debug($"[JobIconService] CreateJobShared ClassJobId={classJobId} path={path}");
+        return _textureProvider.GetFromFile(path);
+    }
+
+    private ISharedImmediateTexture? CreateRoleShared(string englishName)
+    {
+        if (!RoleIconFileNames.TryGetValue(englishName, out var fileName))
+        {
+            _log.Debug($"未找到分组图标映射 {englishName}");
+            return null;
+        }
+
+        var path = Path.Combine(_roleIconsDir, $"{fileName}.png");
+        if (!File.Exists(path))
+        {
+            _log.Debug($"分组图标文件不存在: {path}");
+            return null;
+        }
+
+        _log.Debug($"[JobIconService] CreateRoleShared {englishName} path={path}");
+        return _textureProvider.GetFromFile(path);
     }
 
     public void Dispose()
     {
-        _iconSharedCache.Clear();
-        _roleIconSharedCache.Clear();
+        // ISharedImmediateTexture 不需要手动 Dispose；
+        // 清空字典释放引用，让 GC 回收。
+        _jobSharedCache.Clear();
+        _roleSharedCache.Clear();
     }
 }
