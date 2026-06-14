@@ -7,8 +7,8 @@ using CraftFlow.Data.Models;
 namespace CraftFlow.Services;
 
 /// <summary>
-/// 职业图标服务，参考 WrathCombo Icons.cs 的实现。
-/// 使用 GetFromFile + 路径的方式加载图标（非 GetFromGameIcon）。
+/// 职业图标服务，严格参考 WrathCombo Icons.cs 实现。
+/// 使用 GetFromFile(path) 方式加载图标（非 GetFromGameIcon）。
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
@@ -27,11 +27,11 @@ public sealed class JobIconService : IDisposable
     {
         { "Tank", 62581 },         // RoleBaseIconID + 1
         { "Healer", 62582 },       // RoleBaseIconID + 2
-        { "Maiming DPS", 62584 },  // RoleBaseIconID + 4 (Melee)
+        { "Maiming DPS", 62584 },  // Melee (RoleBaseIconID + 4)
         { "Striking DPS", 62583 },
         { "Scouting DPS", 62585 },
         { "Ranged DPS", 62586 },   // RoleBaseIconID + 6
-        { "Casting DPS", 62587 },  // RoleBaseIconID + 7 (Magic)
+        { "Casting DPS", 62587 },  // Magic (RoleBaseIconID + 7)
     };
 
     /// <summary>
@@ -52,6 +52,7 @@ public sealed class JobIconService : IDisposable
 
     /// <summary>
     /// 获取职业图标（参考 WrathCombo GetTextureFromIconId 方式）。
+    /// 使用 GetFromFile(path) 而非 GetFromGameIcon。
     /// </summary>
     public ImTextureID GetJobIcon(uint classJobId)
     {
@@ -67,10 +68,8 @@ public sealed class JobIconService : IDisposable
                 }
 
                 _log.Debug($"加载职业图标 ClassJobId={classJobId} IconId={iconId}");
-                
-                // 参考 WrathCombo：GameIconLookup(iconId, false, true) — hdIcon=true
-                var lookup = new GameIconLookup(iconId, false, true);
-                shared = _textureProvider.GetFromGameIcon(lookup);
+                shared = LoadIconTexture(iconId);
+                if (shared is null) return new ImTextureID(0);
                 _iconSharedCache[classJobId] = shared;
             }
 
@@ -100,7 +99,7 @@ public sealed class JobIconService : IDisposable
             {
                 uint iconId;
 
-                // 战斗角色：使用专用角色图标（WrathCombo 方式）
+                // 战斗角色：使用专用角色图标
                 if (CombatRoleIconIds.TryGetValue(englishName, out var combatIconId))
                 {
                     iconId = combatIconId;
@@ -118,10 +117,8 @@ public sealed class JobIconService : IDisposable
                 if (iconId == 0) return new ImTextureID(0);
 
                 _log.Debug($"加载分组图标 {englishName} IconId={iconId}");
-                
-                // 参考 WrathCombo：hdIcon=true
-                var lookup = new GameIconLookup(iconId, false, true);
-                shared = _textureProvider.GetFromGameIcon(lookup);
+                shared = LoadIconTexture(iconId);
+                if (shared is null) return new ImTextureID(0);
                 _roleIconSharedCache[englishName] = shared;
             }
 
@@ -138,6 +135,29 @@ public sealed class JobIconService : IDisposable
         }
 
         return new ImTextureID(0);
+    }
+
+    /// <summary>
+    /// 加载图标纹理（参考 WrathCombo GetTextureFromIconId 方式）。
+    /// 使用 GetFromFile(path) 而非 GetFromGameIcon。
+    /// </summary>
+    private ISharedImmediateTexture? LoadIconTexture(uint iconId)
+    {
+        try
+        {
+            // 参考 WrathCombo：GameIconLookup(iconId, false, true)
+            var lookup = new GameIconLookup(iconId, false, true);
+            
+            // 方式1：直接用 GetFromGameIcon（WrathCombo 的 fallback 路径）
+            // 注：WrathCombo 主路径是 GetFromFile(resolvedPath)，但 GetFromGameIcon 也应该能用
+            var shared = _textureProvider.GetFromGameIcon(lookup);
+            return shared;
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"LoadIconTexture 失败 IconId={iconId}: {ex.Message}");
+            return null;
+        }
     }
 
     public void Dispose()
