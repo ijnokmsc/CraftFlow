@@ -469,18 +469,20 @@ public sealed class EquipmentRepository
 
         if (!_cache.ClassJobSheet.TryGetValue(classJobId, out var classJob))
         {
+            _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 不在 ClassJobSheet 中，使用回退");
             return GetClassJobIconFallback(classJobId);
         }
 
         // 路径1：ClassJob.ItemSoulCrystal → Item.Icon（战斗职业有灵魂水晶）
-        // Lumina ClassJob 没有 Icon/IconMain 字段（ILSpy 反编译确认）
-        // Item.Icon 是 ushort 类型（offset + 136）
         try
         {
             var soulCrystalRowId = classJob.ItemSoulCrystal.RowId;
+            _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal.RowId={soulCrystalRowId}");
+
             if (soulCrystalRowId > 0 && _cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
             {
                 var iconId = (uint)soulCrystalItem.Icon;
+                _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} soulCrystalItem.Icon={iconId} (ushort→uint)");
                 if (iconId > 0)
                 {
                     return iconId;
@@ -489,16 +491,19 @@ public sealed class EquipmentRepository
         }
         catch (Exception ex)
         {
-            _log.Debug($"GetClassJobIcon: ItemSoulCrystal 失败 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"[GetClassJobIcon] ItemSoulCrystal 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
         }
 
-        // 路径2：ClassJob.ItemStartingWeaponMainHand → Item.Icon（生产/采集无灵魂水晶，用主手工具图标）
+        // 路径2：ClassJob.ItemStartingWeaponMainHand → Item.Icon（生产/采集用主手工具图标）
         try
         {
             var weaponRowId = classJob.ItemStartingWeaponMainHand.RowId;
+            _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemStartingWeaponMainHand.RowId={weaponRowId}");
+
             if (weaponRowId > 0 && _cache.ItemSheet.TryGetValue(weaponRowId, out var weaponItem))
             {
                 var iconId = (uint)weaponItem.Icon;
+                _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} weaponItem.Icon={iconId} (ushort→uint)");
                 if (iconId > 0)
                 {
                     return iconId;
@@ -507,9 +512,10 @@ public sealed class EquipmentRepository
         }
         catch (Exception ex)
         {
-            _log.Debug($"GetClassJobIcon: ItemStartingWeaponMainHand 失败 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"[GetClassJobIcon] ItemStartingWeaponMainHand 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
         }
 
+        _log.Debug($"[GetClassJobIcon] 所有路径失败 ClassJobId={classJobId}，使用回退");
         return GetClassJobIconFallback(classJobId);
     }
 

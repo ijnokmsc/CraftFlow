@@ -7,10 +7,8 @@ using CraftFlow.Data.Models;
 namespace CraftFlow.Services;
 
 /// <summary>
-/// 职业图标服务，所有图标直接从游戏资源加载。
-/// 参考 WrathCombo：三参数 GameIconLookup，不缓存 wrap。
-/// 战斗角色分组使用 RoleBaseIconID + offset（WrathCombo 来源），
-/// 生产/采集分组无专用角色图标，使用第一个职业的图标。
+/// 职业图标服务，参考 WrathCombo Icons.cs 的实现。
+/// 使用 GetFromFile + 路径的方式加载图标（非 GetFromGameIcon）。
 /// </summary>
 public sealed class JobIconService : IDisposable
 {
@@ -18,23 +16,22 @@ public sealed class JobIconService : IDisposable
     private readonly EquipmentRepository _equipRepo;
     private readonly IPluginLog _log;
 
+    // 缓存：只存 ISharedImmediateTexture，每次 Draw 时 GetWrapOrDefault()
     private readonly Dictionary<uint, ISharedImmediateTexture> _iconSharedCache = [];
     private readonly Dictionary<string, ISharedImmediateTexture> _roleIconSharedCache = [];
 
     /// <summary>
-    /// 战斗角色分组专用图标 ID（来源 WrathCombo）。
-    /// RoleBaseIconID = 62580，offset 对应 FFXIV ClassJob.Role 编号。
-    /// 注意：游戏中没有生产(DoH)和采集(DoL)的专用角色图标。
+    /// 战斗角色分组专用图标 ID（来源 WrathCombo Role.IconID + offset）。
     /// </summary>
     private static readonly Dictionary<string, uint> CombatRoleIconIds = new()
     {
-        { "Tank", 62581 },         // Role=1
-        { "Healer", 62582 },       // Role=4
-        { "Maiming DPS", 62584 },  // Role=2
+        { "Tank", 62581 },         // RoleBaseIconID + 1
+        { "Healer", 62582 },       // RoleBaseIconID + 2
+        { "Maiming DPS", 62584 },  // RoleBaseIconID + 4 (Melee)
         { "Striking DPS", 62583 },
         { "Scouting DPS", 62585 },
-        { "Ranged DPS", 62586 },   // Role=3
-        { "Casting DPS", 62587 },  // Role=5
+        { "Ranged DPS", 62586 },   // RoleBaseIconID + 6
+        { "Casting DPS", 62587 },  // RoleBaseIconID + 7 (Magic)
     };
 
     /// <summary>
@@ -54,7 +51,7 @@ public sealed class JobIconService : IDisposable
     }
 
     /// <summary>
-    /// 获取职业图标。不依赖 EquipmentRepository 的 wrap 缓存。
+    /// 获取职业图标（参考 WrathCombo GetTextureFromIconId 方式）。
     /// </summary>
     public ImTextureID GetJobIcon(uint classJobId)
     {
@@ -70,7 +67,10 @@ public sealed class JobIconService : IDisposable
                 }
 
                 _log.Debug($"加载职业图标 ClassJobId={classJobId} IconId={iconId}");
-                shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId, false, false));
+                
+                // 参考 WrathCombo：GameIconLookup(iconId, false, true) — hdIcon=true
+                var lookup = new GameIconLookup(iconId, false, true);
+                shared = _textureProvider.GetFromGameIcon(lookup);
                 _iconSharedCache[classJobId] = shared;
             }
 
@@ -91,8 +91,6 @@ public sealed class JobIconService : IDisposable
 
     /// <summary>
     /// 获取角色分组图标。
-    /// 战斗角色使用专用角色图标（WrathCombo RoleBaseIconID + offset）。
-    /// 生产/采集无专用角色图标，使用第一个职业的图标。
     /// </summary>
     public ImTextureID GetRoleGroupIcon(string englishName)
     {
@@ -102,7 +100,7 @@ public sealed class JobIconService : IDisposable
             {
                 uint iconId;
 
-                // 战斗角色：使用专用角色图标
+                // 战斗角色：使用专用角色图标（WrathCombo 方式）
                 if (CombatRoleIconIds.TryGetValue(englishName, out var combatIconId))
                 {
                     iconId = combatIconId;
@@ -120,7 +118,10 @@ public sealed class JobIconService : IDisposable
                 if (iconId == 0) return new ImTextureID(0);
 
                 _log.Debug($"加载分组图标 {englishName} IconId={iconId}");
-                shared = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId, false, false));
+                
+                // 参考 WrathCombo：hdIcon=true
+                var lookup = new GameIconLookup(iconId, false, true);
+                shared = _textureProvider.GetFromGameIcon(lookup);
                 _roleIconSharedCache[englishName] = shared;
             }
 
