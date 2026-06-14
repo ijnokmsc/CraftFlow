@@ -472,64 +472,45 @@ public sealed class EquipmentRepository
             return GetClassJobIconFallback(classJobId);
         }
 
-        // 方法1：通过 ItemSoulCrystal 获取水晶图标（最可靠）
-        // ClassJob.ItemSoulCrystal 是 RowRef<Item>，读对应 Item 的 Icon 字段
+        // 路径1：ClassJob.ItemSoulCrystal → Item.Icon（战斗职业有灵魂水晶）
+        // Lumina ClassJob 没有 Icon/IconMain 字段（ILSpy 反编译确认）
+        // Item.Icon 是 ushort 类型（offset + 136）
         try
         {
             var soulCrystalRowId = classJob.ItemSoulCrystal.RowId;
             if (soulCrystalRowId > 0 && _cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
             {
-                var iconId = GetItemIconId(soulCrystalItem);
+                var iconId = (uint)soulCrystalItem.Icon;
                 if (iconId > 0)
                 {
-                    _log.Debug($"GetClassJobIcon: ClassJobId={classJobId} ItemSoulCrystal={soulCrystalRowId} IconId={iconId}");
                     return iconId;
                 }
             }
         }
         catch (Exception ex)
         {
-            _log.Debug($"GetClassJobIcon: ItemSoulCrystal 方法失败 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"GetClassJobIcon: ItemSoulCrystal 失败 ClassJobId={classJobId}: {ex.Message}");
         }
 
-        // 方法2：反射读 IconMain（兼容性，某些 Lumina 版本可能有此字段）
+        // 路径2：ClassJob.ItemStartingWeaponMainHand → Item.Icon（生产/采集无灵魂水晶，用主手工具图标）
         try
         {
-            var cjType = classJob.GetType();
-            var iconProp = cjType.GetProperty("IconMain") ?? cjType.GetProperty("Icon");
-            if (iconProp is not null)
+            var weaponRowId = classJob.ItemStartingWeaponMainHand.RowId;
+            if (weaponRowId > 0 && _cache.ItemSheet.TryGetValue(weaponRowId, out var weaponItem))
             {
-                var val = iconProp.GetValue(classJob);
-                if (val is uint u && u > 0) return u;
-                if (val is int i && i > 0) return (uint)i;
+                var iconId = (uint)weaponItem.Icon;
+                if (iconId > 0)
+                {
+                    return iconId;
+                }
             }
         }
         catch (Exception ex)
         {
-            _log.Debug($"GetClassJobIcon: 反射方法失败 ClassJobId={classJobId}: {ex.Message}");
+            _log.Debug($"GetClassJobIcon: ItemStartingWeaponMainHand 失败 ClassJobId={classJobId}: {ex.Message}");
         }
 
-        // 回退：使用已知的职业图标 ID 映射
         return GetClassJobIconFallback(classJobId);
-    }
-
-    /// <summary>
-    /// 从 Item Lumina 行中读取 Icon 字段值。
-    /// </summary>
-    private static uint GetItemIconId(Item item)
-    {
-        var itemType = item.GetType();
-        var iconProp = itemType.GetProperty("Icon");
-        if (iconProp is null) return 0;
-
-        try
-        {
-            var val = iconProp.GetValue(item);
-            if (val is uint u) return u;
-            if (val is int i) return (uint)i;
-        }
-        catch { }
-        return 0;
     }
 
     /// <summary>
