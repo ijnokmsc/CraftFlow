@@ -465,38 +465,71 @@ public sealed class EquipmentRepository
     /// <returns>游戏图标 ID，0 表示无法获取。</returns>
     public uint GetClassJobIcon(uint classJobId)
     {
-        // 从 Lumina ClassJob Sheet 获取图标 ID
+        if (classJobId == 0) return 62147;
+
         if (!_cache.ClassJobSheet.TryGetValue(classJobId, out var classJob))
         {
-            return 0;
+            return GetClassJobIconFallback(classJobId);
         }
 
-        // 通过反射获取 Icon/IconMain 字段（不同 Lumina 版本字段名可能不同）
-        uint iconId = 0;
-        var cjType = classJob.GetType();
-        var iconProp = cjType.GetProperty("IconMain") ?? cjType.GetProperty("Icon");
-        if (iconProp is not null)
+        // 方法1：通过 ItemSoulCrystal 获取水晶图标（最可靠）
+        // ClassJob.ItemSoulCrystal 是 RowRef<Item>，读对应 Item 的 Icon 字段
+        try
         {
-            try
+            var soulCrystalRowId = classJob.ItemSoulCrystal.RowId;
+            if (soulCrystalRowId > 0 && _cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
+            {
+                var iconId = GetItemIconId(soulCrystalItem);
+                if (iconId > 0)
+                {
+                    _log.Debug($"GetClassJobIcon: ClassJobId={classJobId} ItemSoulCrystal={soulCrystalRowId} IconId={iconId}");
+                    return iconId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"GetClassJobIcon: ItemSoulCrystal 方法失败 ClassJobId={classJobId}: {ex.Message}");
+        }
+
+        // 方法2：反射读 IconMain（兼容性，某些 Lumina 版本可能有此字段）
+        try
+        {
+            var cjType = classJob.GetType();
+            var iconProp = cjType.GetProperty("IconMain") ?? cjType.GetProperty("Icon");
+            if (iconProp is not null)
             {
                 var val = iconProp.GetValue(classJob);
-                if (val is uint u) iconId = u;
-                else if (val is int i) iconId = (uint)i;
-                else if (val is ushort us) iconId = us;
+                if (val is uint u && u > 0) return u;
+                if (val is int i && i > 0) return (uint)i;
             }
-            catch
-            {
-                // 反射获取失败
-            }
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"GetClassJobIcon: 反射方法失败 ClassJobId={classJobId}: {ex.Message}");
         }
 
         // 回退：使用已知的职业图标 ID 映射
-        if (iconId == 0)
-        {
-            iconId = GetClassJobIconFallback(classJobId);
-        }
+        return GetClassJobIconFallback(classJobId);
+    }
 
-        return iconId;
+    /// <summary>
+    /// 从 Item Lumina 行中读取 Icon 字段值。
+    /// </summary>
+    private static uint GetItemIconId(Item item)
+    {
+        var itemType = item.GetType();
+        var iconProp = itemType.GetProperty("Icon");
+        if (iconProp is null) return 0;
+
+        try
+        {
+            var val = iconProp.GetValue(item);
+            if (val is uint u) return u;
+            if (val is int i) return (uint)i;
+        }
+        catch { }
+        return 0;
     }
 
     /// <summary>
@@ -547,52 +580,14 @@ public sealed class EquipmentRepository
 
     /// <summary>
     /// 职业图标 ID 回退映射表。
-    /// 当 Lumina ClassJob 结构无法通过反射获取 Icon/IconMain 字段时使用。
-    /// Key: ClassJob RowId, Value: 游戏图标 ID。
-    /// 战斗职业使用职业水晶图标，生产/采集使用工具图标。
+    /// 当 ItemSoulCrystal 方法和反射均失败时，使用此映射。
+    /// 注意：此映射的图标 ID 需要从游戏中确认，当前暂返回 0 避免显示错误图标。
+    /// TODO: 进游戏验证后填入正确的 2600x 系列图标 ID。
     /// </summary>
-    private static uint GetClassJobIconFallback(uint classJobId) => classJobId switch
+    private static uint GetClassJobIconFallback(uint classJobId)
     {
-        // 防护职业
-        19 => 62401, // 骑士
-        21 => 62402, // 战士
-        32 => 62403, // 暗黑骑士
-        37 => 62404, // 绝枪战士
-        // 治疗职业
-        24 => 62501, // 白魔法师
-        28 => 62502, // 学者
-        33 => 62503, // 占星术士
-        40 => 62504, // 贤者
-        // 近战DPS
-        22 => 62601, // 龙骑士
-        20 => 62602, // 武僧
-        34 => 62603, // 武士
-        39 => 62604, // 钐镰客
-        // 远敏DPS
-        23 => 62701, // 吟游诗人
-        31 => 62702, // 机工士
-        38 => 62703, // 舞者
-        // 法系DPS
-        25 => 62801, // 黑魔法师
-        27 => 62802, // 召唤师
-        35 => 62803, // 赤魔法师
-        42 => 62804, // 绘灵法师
-        // 忍者/蝰蛇
-        30 => 62901, // 忍者
-        41 => 62902, // 蝰蛇剑士
-        // 生产职业
-        8 => 62001,  // 刻木匠
-        9 => 62002,  // 锻铁匠
-        10 => 62003, // 铸甲匠
-        11 => 62004, // 雕金匠
-        12 => 62005, // 制革匠
-        13 => 62006, // 裁衣匠
-        14 => 62007, // 炼金术士
-        15 => 62008, // 烹调师
-        // 采集职业
-        16 => 63001, // 采矿工
-        17 => 63002, // 园艺工
-        18 => 63003, // 捕鱼人
-        _ => 0
-    };
+        // 临时：返回 0 让图标不显示，避免错误图标
+        // 进游戏测试 ItemSoulCrystal 方法后，用实际日志中的 IconId 更新此表
+        return 0;
+    }
 }
