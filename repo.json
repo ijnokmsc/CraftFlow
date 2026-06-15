@@ -17,5 +17,24 @@
     "DownloadLinkUpdate": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.1.1/latest.zip",
     "DownloadLinkTesting": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.1.1/latest.zip",
     "IconUrl": ""
+  },
+  {
+    "Author": "zhaoy",
+    "Name": "SilverDasher",
+    "InternalName": "SilverDasher",
+    "AssemblyVersion": "0.1.0.0",
+    "Description": "FF14跨服猎怪+FATE播报插件，照搬ACT版SilverDasher核心功能。支持MQTT跨服消息订阅、TTS语音播报、游戏原生Toast通知。使用 /sd 打开设置窗口。",
+    "ApplicableVersion": "any",
+    "DalamudApiLevel": 15,
+    "RepoUrl": "https://github.com/ijnokmsc/SilverDasher",
+    "Changelog": "v0.1.0 首次发布 - MQTT跨服播报 + TTS语音 + Toast通知 + 聊天框通知",
+    "Punchline": "FF14跨服猎怪+FATE播报 - MQTT/TTS/Toast",
+    "IsHide": false,
+    "IsTestingExclusive": false,
+    "LastUpdate": "1781431268",
+    "DownloadLinkInstall": "https://github.com/ijnokmsc/SilverDasher/releases/download/v0.1.0/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/ijnokmsc/SilverDasher/releases/download/v0.1.0/latest.zip",
+    "DownloadLinkTesting": "https://github.com/ijnokmsc/SilverDasher/releases/download/v0.1.0/latest.zip",
+    "IconUrl": ""
   }
 ]
