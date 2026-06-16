@@ -62,6 +62,15 @@ public sealed class MainWindow : Window
         IPluginLog log)
         : base("CraftFlow###CraftFlowMainWindow")
     {
+        try
+        {
+            var ver = typeof(Plugin).Assembly.GetName().Version;
+            WindowName = $"CraftFlow v{ver?.Major}.{ver?.Minor}.{ver?.Build}###CraftFlowMainWindow";
+        }
+        catch
+        {
+            // 如果读取版本失败，使用默认标题
+        }
         _plugin = plugin;
         _bomExpander = bomExpander;
         _materialAggregator = materialAggregator;
@@ -127,7 +136,7 @@ public sealed class MainWindow : Window
 
         _statusBar = new StatusBarWidget(gbrIpc, artisanIpc, log);
 
-        Size = new Vector2(850, 600);
+        Size = new Vector2(870, 610);
         SizeCondition = ImGuiCond.Once;
     }
 
