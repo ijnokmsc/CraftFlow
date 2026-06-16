@@ -103,6 +103,7 @@ public sealed class EquipmentSlotGroupWidget
                 ImGui.SameLine();
                 var target = selectedItems.Find(t => t.ItemId == item.ItemId);
                 int qty = target?.Quantity ?? item.Quantity;
+                ImGui.SetNextItemWidth(40);
                 if (ImGui.InputInt($"###Qty", ref qty, 1, 5))
                 {
                     if (qty < 1) qty = 1;

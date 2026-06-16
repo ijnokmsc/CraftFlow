@@ -112,6 +112,7 @@ public sealed class Plugin : IDalamudPlugin
             _progressManager,
             _craftProgressWindow,
             _jobIconService,
+            _luminaCache,
             Log
         );
         // CraftingEnded 在 _mainWindow 赋值后再订阅，避免 CS8602 空引用警告

@@ -111,42 +111,63 @@ public sealed class EquipmentTab
             return;
         }
 
-        // 标题 + 收藏按钮 + 清空
+        // === 行1：标题 + 操作按钮 ===
         ImGui.Text($"材料清单 ({_selectedItems.Count} 件装备)");
         if (!string.IsNullOrEmpty(_loadedFavName))
         {
             ImGui.SameLine();
             ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), $"({_loadedFavName})");
         }
-        ImGui.SameLine();
-        if (ImGui.Button("收藏###SaveEquipFav"))
+        ImGui.SameLine(ImGui.GetContentRegionAvail().X - 120);
+        if (ImGui.Button("收藏###SaveEquipFav", new Vector2(50, 0)))
         {
             _favName = $"装备 {DateTime.Now:yyyyMMdd_HHmmss}";
             _showFavPopup = true;
         }
         ImGui.SameLine();
-        if (ImGui.Button("一键清空###ClearAll"))
+        if (ImGui.Button("清空###ClearAll", new Vector2(50, 0)))
         {
             _selectedItems.Clear();
             RecalculateBom();
         }
 
-        // 汇总/树视图切换
+        // === 行2：视图 / 显示 / 缺失 选项分组 ===
+        ImGui.Spacing();
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "视图");
         ImGui.SameLine();
-        if (ImGui.Checkbox("树视图###Equip_ShowTreeView", ref _showTreeView))
-        {
-            // 切换视图模式
-        }
+        ImGui.Checkbox("树视图###Equip_ShowTreeView", ref _showTreeView);
+        ImGui.SameLine(0, 16);
 
-        // 显示水晶切换
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "显示");
         ImGui.SameLine();
         bool showCrystals = _config.ShowCrystals;
-        if (ImGui.Checkbox("显示水晶###Equip_ShowCrystals", ref showCrystals))
+        if (ImGui.Checkbox("水晶###Equip_ShowCrystals", ref showCrystals))
         {
             _config.ShowCrystals = showCrystals;
             _config.Save();
             RecalculateBom();
         }
+        ImGui.SameLine(0, 16);
+
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "缺失");
+        ImGui.SameLine();
+        bool onlyMissing = _config.OnlyMissingMaterials;
+        if (ImGui.Checkbox("仅缺失材料###Equip_OnlyMissing", ref onlyMissing))
+        {
+            _config.OnlyMissingMaterials = onlyMissing;
+            _config.Save();
+            RecalculateBom();
+        }
+        ImGui.SameLine();
+        if (!_config.OnlyMissingMaterials) ImGui.BeginDisabled();
+        bool hqOnly = _config.HqOnly;
+        if (ImGui.Checkbox("仅计HQ###Equip_HqOnly", ref hqOnly))
+        {
+            _config.HqOnly = hqOnly;
+            _config.Save();
+            RecalculateBom();
+        }
+        if (!_config.OnlyMissingMaterials) ImGui.EndDisabled();
 
         ImGui.Separator();
 
@@ -156,7 +177,7 @@ public sealed class EquipmentTab
         }
         else
         {
-            _materialListWidget.DrawMaterialPanel(_materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y);
+            _materialListWidget.DrawMaterialPanel(_materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y, _bomResult);
         }
 
         DrawFavPopup();

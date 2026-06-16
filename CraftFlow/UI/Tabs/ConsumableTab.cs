@@ -27,6 +27,7 @@ public sealed class ConsumableTab
     private readonly RecipeRepository _recipeRepo;
     private readonly MaterialListWidget _materialListWidget;
     private readonly PluginConfig _config;
+    private readonly LuminaCache _luminaCache;
     private readonly IPluginLog _log;
 
     private string _searchFilter = string.Empty;
@@ -38,6 +39,9 @@ public sealed class ConsumableTab
 
     // 版本筛选
     private int _versionFilter = 0; // 0 = 全部
+
+    // 数量/次数 模式切换
+    private bool _useCraftTimes = false; // false=数量（生产出N件），true=次数（制作N次）
     private static readonly (int Ver, int Min, int Max)[] PatchRanges =
     [
         (70, 650, 699),
@@ -68,6 +72,7 @@ public sealed class ConsumableTab
         RecipeRepository recipeRepo,
         MaterialListWidget materialListWidget,
         PluginConfig config,
+        LuminaCache luminaCache,
         IPluginLog log)
     {
         _bomExpander = bomExpander;
@@ -76,6 +81,7 @@ public sealed class ConsumableTab
         _recipeRepo = recipeRepo;
         _materialListWidget = materialListWidget;
         _config = config;
+        _luminaCache = luminaCache;
         _log = log;
     }
 
@@ -131,11 +137,12 @@ public sealed class ConsumableTab
     /// </summary>
     private void DrawVersionFilter()
     {
-        ImGui.Text("版本筛选:");
+        ImGui.Text("版本:");
         ImGui.SameLine();
 
         string currentLabel = _versionFilter == 0 ? "全部" : FormatPatch(_versionFilter);
 
+        ImGui.SetNextItemWidth(65);
         if (ImGui.BeginCombo("###ConsumableVersion", currentLabel))
         {
             if (ImGui.Selectable("全部###Ver_all", _versionFilter == 0))
@@ -154,6 +161,24 @@ public sealed class ConsumableTab
 
             ImGui.EndCombo();
         }
+
+        // 数量/次数 模式切换
+        ImGui.SameLine();
+        ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1f), "|");
+        ImGui.SameLine();
+        if (ImGui.RadioButton("数量###ModeQty", !_useCraftTimes))
+        {
+            _useCraftTimes = false;
+            RecalculateBom();
+        }
+        ImGui.SameLine();
+        if (ImGui.RadioButton("次数###ModeTimes", _useCraftTimes))
+        {
+            _useCraftTimes = true;
+            RecalculateBom();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("次数模式：制作 N 次，总产出 = N × 配方产量\n适用于批量制作");
     }
 
     /// <summary>
@@ -226,12 +251,23 @@ public sealed class ConsumableTab
             ImGui.SameLine();
             int qty = _quantityOverrides.GetValueOrDefault(item.RowId, 1);
 
+            // 获取配方产量（用于次数模式显示）
+            int yield = 1;
+            if (_useCraftTimes)
+            {
+                var recipe = _recipeRepo.FindRecipeByItem(item.RowId);
+                yield = recipe?.AmountResult > 0 ? recipe.Value.AmountResult : 1;
+            }
+
+            string qtyLabel = _useCraftTimes ? $"次 ×{yield}" : "数量";
             if (ImGui.Button("-###Minus") && qty > 1) { qty--; UpdateQty(item.RowId, qty); }
             ImGui.SameLine();
             ImGui.SetNextItemWidth(45);
             if (ImGui.InputInt("###Qty", ref qty, 0, 0)) { UpdateQty(item.RowId, qty); }
             ImGui.SameLine();
             if (ImGui.Button("+###Plus")) { qty++; UpdateQty(item.RowId, qty); }
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), qtyLabel);
         }
 
         ImGui.PopID();
@@ -258,22 +294,77 @@ public sealed class ConsumableTab
             return;
         }
 
-        int total = _selectedItems.Sum(t => t.Quantity);
-        ImGui.Text($"材料清单 (共 {total} 件)");
-        ImGui.SameLine();
-        if (ImGui.Button("收藏###SaveConsFav"))
+        // === 行1：标题 + 操作按钮 ===
+        int totalProduced = _selectedItems.Sum(t =>
+        {
+            if (_useCraftTimes)
+            {
+                var recipe = _recipeRepo.FindRecipeByItem(t.ItemId);
+                int yield = recipe?.AmountResult > 0 ? recipe.Value.AmountResult : 1;
+                return t.Quantity * yield;
+            }
+            return t.Quantity;
+        });
+        string headerSuffix = _useCraftTimes
+            ? $"({_selectedItems.Sum(t => t.Quantity)} 次 → {totalProduced} 件)"
+            : $"(共 {totalProduced} 件)";
+        ImGui.Text($"材料清单 {headerSuffix}");
+        ImGui.SameLine(ImGui.GetContentRegionAvail().X - 120);
+        if (ImGui.Button("收藏###SaveConsFav", new Vector2(50, 0)))
         {
             _favName = $"食物药品 {DateTime.Now:yyyyMMdd_HHmmss}";
             _showFavPopup = true;
         }
         ImGui.SameLine();
-        ImGui.Checkbox("树视图", ref _showTreeView);
+        if (ImGui.Button("清空###ConsClearAll", new Vector2(50, 0)))
+        {
+            ClearSelection();
+        }
+
+        // === 行2：视图 / 显示 / 缺失 选项分组 ===
+        ImGui.Spacing();
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "视图");
+        ImGui.SameLine();
+        ImGui.Checkbox("树视图###Cons_ShowTreeView", ref _showTreeView);
+        ImGui.SameLine(0, 16);
+
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "显示");
+        ImGui.SameLine();
+        bool showCrystals = _config.ShowCrystals;
+        if (ImGui.Checkbox("水晶###Cons_ShowCrystals", ref showCrystals))
+        {
+            _config.ShowCrystals = showCrystals;
+            _config.Save();
+            RecalculateBom();
+        }
+        ImGui.SameLine(0, 16);
+
+        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "缺失");
+        ImGui.SameLine();
+        bool onlyMissing = _config.OnlyMissingMaterials;
+        if (ImGui.Checkbox("仅缺失材料###Cons_OnlyMissing", ref onlyMissing))
+        {
+            _config.OnlyMissingMaterials = onlyMissing;
+            _config.Save();
+            RecalculateBom();
+        }
+        ImGui.SameLine();
+        if (!_config.OnlyMissingMaterials) ImGui.BeginDisabled();
+        bool hqOnly = _config.HqOnly;
+        if (ImGui.Checkbox("仅计HQ###Cons_HqOnly", ref hqOnly))
+        {
+            _config.HqOnly = hqOnly;
+            _config.Save();
+            RecalculateBom();
+        }
+        if (!_config.OnlyMissingMaterials) ImGui.EndDisabled();
+
         ImGui.Separator();
 
         if (_showTreeView && _bomResult is not null)
             _materialListWidget.DrawTree(_bomResult);
         else
-            _materialListWidget.DrawMaterialPanel(_materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y);
+            _materialListWidget.DrawMaterialPanel(_materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y, _bomResult);
 
         DrawFavPopup();
     }
@@ -316,10 +407,19 @@ public sealed class ConsumableTab
 
         var root = new BomNode { ItemId = 0, ItemName = "汇总", Quantity = 1, Depth = -1 };
         foreach (var t in _selectedItems)
-            root.Children.Add(_bomExpander.Expand(t.ItemId, t.Quantity));
+        {
+            int bomQty = t.Quantity;
+            if (_useCraftTimes)
+            {
+                var recipe = _recipeRepo.FindRecipeByItem(t.ItemId);
+                int yield = recipe?.AmountResult > 0 ? recipe.Value.AmountResult : 1;
+                bomQty = t.Quantity * yield; // 次数 × 单次产量 = 总产出
+            }
+            root.Children.Add(_bomExpander.Expand(t.ItemId, bomQty));
+        }
 
         _bomResult = root;
-        _materialSummary = _materialAggregator.Aggregate(root);
+        _materialSummary = _materialAggregator.Aggregate(root, _config.ShowCrystals);
         _craftSteps = _craftOrderCalculator.CalculateOrder(root);
     }
 

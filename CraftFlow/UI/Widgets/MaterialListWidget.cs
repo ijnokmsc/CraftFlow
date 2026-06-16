@@ -4,6 +4,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
+using CraftFlow.Config;
 using CraftFlow.Data.Models;
 using CraftFlow.Helpers;
 using CraftFlow.IPC;
@@ -20,10 +21,14 @@ public sealed class MaterialListWidget
     private readonly ArtisanIpcClient _artisanIpc;
     private readonly IpcAvailabilityChecker _ipcChecker;
     private readonly CraftProgressManager _progressManager;
+    private readonly PluginConfig _config;
     private readonly IPluginLog _log;
 
     /// <summary>制作开始回调，由 MainWindow 设置。用于将制作流程委托给 CraftProgressWindow。</summary>
     public Action<List<CraftStep>>? OnStartCrafting { get; set; }
+
+    /// <summary>当前 BOM 树根节点，由外部 Tab 设置，用于缺失材料计算。</summary>
+    private BomNode? _bomRoot;
 
     private int _treeNodeIdCounter;
     private string? _gbrPushNotification;
@@ -38,19 +43,22 @@ public sealed class MaterialListWidget
 
     // 背包库存缓存（每帧刷新一次）
     private List<(MaterialEntry Entry, int Owned, int Deficit, bool Complete)>? _inventoryCache;
-    private int _inventoryCacheFrame;
+    private Dictionary<uint, int>? _effectiveNeedsCache;
+    private int _cacheFrame;
 
     public MaterialListWidget(
         GbrIpcClient gbrIpc,
         ArtisanIpcClient artisanIpc,
         IpcAvailabilityChecker ipcChecker,
         CraftProgressManager progressManager,
+        PluginConfig config,
         IPluginLog log)
     {
         _gbrIpc = gbrIpc;
         _artisanIpc = artisanIpc;
         _ipcChecker = ipcChecker;
         _progressManager = progressManager;
+        _config = config;
         _log = log;
     }
 
@@ -65,26 +73,29 @@ public sealed class MaterialListWidget
     /// <param name="materials">材料汇总列表。</param>
     /// <param name="craftSteps">制作步骤列表（可为空）。</param>
     /// <param name="availableHeight">可用高度（0 表示自动）。</param>
-    public void DrawMaterialPanel(List<MaterialEntry> materials, List<CraftStep>? craftSteps, float availableHeight = 0)
+    /// <param name="bomRoot">BOM 树根节点（用于缺失材料计算，可为 null）。</param>
+    public void DrawMaterialPanel(List<MaterialEntry> materials, List<CraftStep>? craftSteps, float availableHeight = 0, BomNode? bomRoot = null)
     {
+        _bomRoot = bomRoot;
+
         if (materials.Count == 0)
         {
             ImGui.TextColored(ColorGray, "暂无材料数据");
             return;
         }
 
-        // 刷新库存缓存
-        RefreshInventoryCache(materials);
+        // 刷新缓存
+        RefreshCaches(materials);
 
-        // 计算按钮栏高度
-        const float buttonAreaHeight = 90f;
+        // 计算按钮栏高度（按钮行 + 提示区域，比之前少了 Checkbox 行）
+        const float buttonAreaHeight = 65f;
 
         // 材料列表（可滚动）
         float listHeight = availableHeight > 0 ? availableHeight - buttonAreaHeight : ImGui.GetContentRegionAvail().Y - buttonAreaHeight;
         if (listHeight < 50) listHeight = 50;
 
         ImGui.BeginChild("MaterialScrollList", new Vector2(0, listHeight), false);
-        DrawSummaryTable(materials);
+        DrawSummaryTable(materials, _effectiveNeedsCache);
         ImGui.EndChild();
 
         // 按钮栏（固定底部）
@@ -92,17 +103,26 @@ public sealed class MaterialListWidget
     }
 
     // ================================================================
-    //  库存检测
+    //  库存检测 + 有效需求计算（合并缓存，每帧一次）
     // ================================================================
 
-    private void RefreshInventoryCache(List<MaterialEntry> materials)
+    private void RefreshCaches(List<MaterialEntry> materials)
     {
         var currentFrame = ImGui.GetFrameCount();
-        if (_inventoryCacheFrame != currentFrame)
-        {
-            _inventoryCache = InventoryHelper.CheckInventory(materials);
-            _inventoryCacheFrame = currentFrame;
-        }
+        if (_cacheFrame == currentFrame) return;
+
+        // HQ 联动"仅缺失材料"：仅影响半成品扣减，不影响背包/需要列的显示
+        bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
+        // 背包列始终显示 HQ+NQ，不受"仅计HQ"影响
+        _inventoryCache = InventoryHelper.CheckInventory(materials, false);
+        _cacheFrame = currentFrame;
+
+        // "仅缺失材料"开启即计算有效需求（含半成品扣减，useHq 联动"仅计HQ"）
+        bool showDeficit = _config.OnlyMissingMaterials;
+        if (showDeficit && _bomRoot is not null)
+            _effectiveNeedsCache = InventoryHelper.CalculateEffectiveNeeds(_bomRoot, useHq);
+        else
+            _effectiveNeedsCache = null;
     }
 
     // ================================================================
@@ -114,11 +134,11 @@ public sealed class MaterialListWidget
     /// </summary>
     public void DrawSummary(List<MaterialEntry> materials)
     {
-        RefreshInventoryCache(materials);
-        DrawSummaryTable(materials);
+        RefreshCaches(materials);
+        DrawSummaryTable(materials, _effectiveNeedsCache);
     }
 
-    private void DrawSummaryTable(List<MaterialEntry> materials)
+    private void DrawSummaryTable(List<MaterialEntry> materials, Dictionary<uint, int>? effectiveNeeds)
     {
         if (materials.Count == 0)
         {
@@ -126,71 +146,105 @@ public sealed class MaterialListWidget
             return;
         }
 
-        if (ImGui.BeginTable("MatTable", 5, ImGuiTableFlags.Resizable | ImGuiTableFlags.RowBg))
+        bool showingDeficit = effectiveNeeds is not null;
+
+        // 6 列：物品 | 需要 | 背包 | 实际所需 | 来源 | 状态
+        if (ImGui.BeginTable("MatTable", 6, ImGuiTableFlags.Resizable | ImGuiTableFlags.RowBg))
         {
-            ImGui.TableSetupColumn("物品", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("需要", ImGuiTableColumnFlags.WidthFixed, 50);
-            ImGui.TableSetupColumn("背包", ImGuiTableColumnFlags.WidthFixed, 50);
-            ImGui.TableSetupColumn("来源", ImGuiTableColumnFlags.WidthFixed, 50);
-            ImGui.TableSetupColumn("状态", ImGuiTableColumnFlags.WidthFixed, 40);
+            ImGui.TableSetupColumn("物品", ImGuiTableColumnFlags.WidthFixed, 120);
+            ImGui.TableSetupColumn("需要", ImGuiTableColumnFlags.WidthFixed, 40);
+            ImGui.TableSetupColumn("背包", ImGuiTableColumnFlags.WidthFixed, 35);
+            ImGui.TableSetupColumn("实际所需", ImGuiTableColumnFlags.WidthFixed, 50);
+            ImGui.TableSetupColumn("来源", ImGuiTableColumnFlags.WidthFixed, 35);
+            ImGui.TableSetupColumn("状态", ImGuiTableColumnFlags.WidthFixed, 30);
             ImGui.TableHeadersRow();
 
             var inventoryData = _inventoryCache;
             foreach (var mat in materials)
             {
+                int totalNeeded = mat.TotalRequired; // "需要"始终显示总需求
+                int backpackOwned = 0;
+                int actualNeeded; // "实际所需" = 需要 - 已有
+
+                // 查背包库存
                 var inv = inventoryData?.FirstOrDefault(i => i.Entry.ItemId == mat.ItemId);
+                if (inv.HasValue && inv.Value.Owned >= 0)
+                    backpackOwned = inv.Value.Owned;
 
-                ImGui.TableNextRow();
-
-                // 行点击选中
-                ImGui.PushID($"matrow_{mat.ItemId}");
-                bool isSelected = (_selectedItemId == mat.ItemId);
-                if (isSelected)
+                // 计算实际所需
+                if (showingDeficit && effectiveNeeds!.TryGetValue(mat.ItemId, out int effectiveNeed))
                 {
-                    // 选中行高亮
-                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
-                        ImGui.ColorConvertFloat4ToU32(new Vector4(0.2f, 0.4f, 0.6f, 0.3f)));
+                    // 有效需求已含半成品扣减，再减直接背包库存
+                    actualNeeded = Math.Max(0, effectiveNeed - backpackOwned);
+                }
+                else if (showingDeficit)
+                {
+                    // 有效需求中不存在 = 被半成品完全覆盖
+                    actualNeeded = 0;
+                }
+                else
+                {
+                    // 非缺失模式：直接减法
+                    actualNeeded = backpackOwned >= 0 ? Math.Max(0, mat.TotalRequired - backpackOwned) : mat.TotalRequired;
                 }
 
-                // 点击选中
+                bool fullyCovered = showingDeficit && actualNeeded == 0 && !effectiveNeeds!.ContainsKey(mat.ItemId);
+
+                ImGui.TableNextRow();
+                ImGui.PushID($"matrow_{mat.ItemId}");
+                bool isSelected = (_selectedItemId == mat.ItemId);
+
+                if (isSelected)
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
+                        ImGui.ColorConvertFloat4ToU32(new Vector4(0.2f, 0.4f, 0.6f, 0.3f)));
+
+                // 物品名
                 ImGui.TableNextColumn();
+                var nameColor = fullyCovered ? ColorGray : new Vector4(1f, 1f, 1f, 1f);
+                ImGui.PushStyleColor(ImGuiCol.Text, nameColor);
                 ImGui.Selectable(mat.ItemName, isSelected,
                     ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowDoubleClick,
                     new Vector2(0, 0));
+                ImGui.PopStyleColor();
                 if (ImGui.IsItemClicked())
-                {
                     _selectedItemId = (_selectedItemId == mat.ItemId) ? uint.MaxValue : mat.ItemId;
-                }
 
-                // 右键菜单
                 DrawItemContextMenu(mat);
 
+                // 需要（始终显示总需求，不受缺失/覆盖影响）
                 ImGui.TableNextColumn();
-                ImGui.Text($"×{mat.TotalRequired}");
+                ImGui.Text($"×{totalNeeded}");
 
+                // 背包（始终显示 HQ+NQ）
                 ImGui.TableNextColumn();
-                if (inv.HasValue)
-                {
-                    int owned = inv.Value.Owned;
-                    if (owned >= 0)
-                        ImGui.TextColored(owned >= mat.TotalRequired ? ColorGreen : ColorOrange, owned.ToString());
-                    else
-                        ImGui.TextColored(ColorGray, "?");
-                }
+                if (backpackOwned > 0)
+                    ImGui.TextColored(backpackOwned >= totalNeeded ? ColorGreen : ColorOrange, backpackOwned.ToString());
+                else if (inv.HasValue && inv.Value.Owned < 0)
+                    ImGui.TextColored(ColorGray, "?");
+                else
+                    ImGui.TextColored(ColorGray, "0");
 
+                // 实际所需
+                ImGui.TableNextColumn();
+                if (fullyCovered)
+                    ImGui.TextColored(ColorGreen, "✓");
+                else if (actualNeeded == 0)
+                    ImGui.TextColored(ColorGreen, "✓");
+                else
+                    ImGui.TextColored(ColorOrange, $"{actualNeeded}");
+
+                // 来源
                 ImGui.TableNextColumn();
                 DrawSourceLabel(mat.Source);
 
+                // 状态
                 ImGui.TableNextColumn();
-                if (inv.HasValue)
-                {
-                    if (inv.Value.Complete)
-                        ImGui.TextColored(ColorGreen, "✓");
-                    else if (inv.Value.Owned >= 0)
-                        ImGui.TextColored(ColorRed, $"缺{inv.Value.Deficit}");
-                    else
-                        ImGui.TextColored(ColorGray, "?");
-                }
+                if (fullyCovered || actualNeeded == 0)
+                    ImGui.TextColored(ColorGreen, "✓");
+                else if (inv.HasValue && inv.Value.Owned >= 0)
+                    ImGui.TextColored(ColorRed, $"缺{actualNeeded}");
+                else
+                    ImGui.TextColored(ColorGray, "?");
 
                 ImGui.PopID();
             }
@@ -228,11 +282,11 @@ public sealed class MaterialListWidget
             }
         }
 
-        // 推送到 GBR（仅采集来源可见）
+        // 复制采集物品到剪贴板（仅采集来源可见）
         if (mat.Source == MaterialSource.Gatherable)
         {
             ImGui.Separator();
-            if (ImGui.MenuItem("推送到 GBR"))
+            if (ImGui.MenuItem("复制到剪贴板"))
             {
                 PushToGbr([mat]);
             }
@@ -242,9 +296,7 @@ public sealed class MaterialListWidget
     }
 
     /// <summary>
-    /// 打开游戏内置物品搜索窗口（/isearch 命令），
-    /// 显示该物品的所有获取途径（商店 NPC、采集点、制作配方等）。
-    /// 效果与每日功能模块 AutoShowItemNPCShopInfo 一致。
+    /// 打开游戏内置物品搜索窗口（/isearch 命令）。
     /// </summary>
     private static void OpenItemSearch(string itemName)
     {
@@ -257,14 +309,12 @@ public sealed class MaterialListWidget
     }
 
     /// <summary>
-    /// 查询 NPC 商店信息并复制到剪贴板（参考 DailyRoutines AutoShowItemNPCShopInfo）。
-    /// 如果 DailyRoutines 已安装，调用其 IPC 打开商店信息窗口。
+    /// 查询 NPC 商店信息并复制到剪贴板。
     /// </summary>
     private void ShowNpcShopInfo(MaterialEntry mat)
     {
         try
         {
-            // 尝试调用 DailyRoutines 的 AutoShowItemNPCShopInfo IPC
             var drIpc = Plugin.PluginInterface.GetIpcSubscriber<uint, bool>(
                 "DailyRoutines.Modules.AutoShowItemNPCShopInfo.OpenShopInfoByItemID");
             var opened = drIpc.InvokeFunc(mat.ItemId);
@@ -274,12 +324,8 @@ public sealed class MaterialListWidget
                 return;
             }
         }
-        catch
-        {
-            // DailyRoutines 未安装或 IPC 不可用，使用内置查询
-        }
+        catch { }
 
-        // 内置查询
         try
         {
             var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
@@ -319,7 +365,6 @@ public sealed class MaterialListWidget
         };
         ImGui.TextColored(color, label);
 
-        // 不可采集的来源显示 tooltip 提示兑换/获取方式
         if (source != MaterialSource.Gatherable && ImGui.IsItemHovered())
         {
             var tip = source switch
@@ -334,58 +379,59 @@ public sealed class MaterialListWidget
     }
 
     // ================================================================
-    //  按钮栏
+    //  按钮栏（Checkbox 已移到 Tab 层级）
     // ================================================================
 
     private void DrawButtonBar(List<MaterialEntry> materials, List<CraftStep>? craftSteps)
     {
         ImGui.Separator();
 
+        float leftW = ImGui.GetContentRegionAvail().X * 0.48f;
+        float h = ImGui.GetContentRegionAvail().Y;
+
+        // 左栏：按钮
+        ImGui.BeginChild("BtnLeft", new Vector2(leftW, h), false);
         DrawPushToGbrButton(materials);
+        DrawCraftWithArtisanButton(craftSteps ?? [], materials);
+        ImGui.EndChild();
+
         ImGui.SameLine();
 
-        var steps = craftSteps ?? [];
-        DrawCraftWithArtisanButton(steps, materials);
-
-        ImGui.Separator();
-        // DrawGbrNotification 只在按钮栏画一次，不在 DrawPushToGbrButton 内重复画
+        // 右栏：通知
+        ImGui.BeginChild("BtnRight", new Vector2(0, h), false);
         DrawGbrNotification();
+        ImGui.EndChild();
     }
 
     // ================================================================
-    //  推送到 GBR
+    //  推送到 GBR（纯剪贴板，不依赖 GBR IPC）
     // ================================================================
 
     public void DrawPushToGbrButton(List<MaterialEntry> materials)
     {
-        bool gbrAvailable = _ipcChecker.IsGbrAvailable();
-        if (!gbrAvailable) ImGui.BeginDisabled();
-
-        if (ImGui.Button("推送到 GBR 采集列表###PushToGbr"))
+        float btnWidth = ImGui.GetContentRegionAvail().X;
+        if (ImGui.Button("复制采集清单到剪贴板###PushToGbr", new Vector2(btnWidth, 0)))
             PushToGbr(materials);
-
-        if (!gbrAvailable)
-        {
-            ImGui.EndDisabled();
-            ImGui.SameLine();
-            if (ImGui.Button("重新检测 GBR###RescanGbr"))
-            {
-                bool nowAvailable = _gbrIpc.TryResubscribe();
-                _log.Information($"GBR 重新检测结果: {(nowAvailable ? "可用" : "不可用")}");
-            }
-            ImGui.SameLine();
-            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), "请先安装 GatherBuddyReborn");
-        }
-        else
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(ColorGray, "(base64 粘贴导入)");
-        }
     }
 
     private void PushToGbr(List<MaterialEntry> materials)
     {
-        var b64 = GbrListHelper.ToGbrBase64(materials);
+        // 优先复用已缓存的有效需求/差额数据
+        Dictionary<uint, int>? deficitMap = null;
+
+        if (_config.OnlyMissingMaterials && _bomRoot is not null)
+        {
+            bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
+            deficitMap = InventoryHelper.CalculateGatherableDeficit(_bomRoot, materials, useHq);
+            if (deficitMap.Count == 0)
+            {
+                _gbrPushNotification = "所有采集材料已齐全，无需采集";
+                _log.Information("GBR 推送: 所有采集材料已齐全");
+                return;
+            }
+        }
+
+        var b64 = GbrListHelper.ToGbrBase64(materials, deficitMap);
         if (string.IsNullOrEmpty(b64))
         {
             _gbrPushNotification = null;
@@ -395,17 +441,19 @@ public sealed class MaterialListWidget
 
         ImGui.SetClipboardText(b64);
 
-        if (_gbrIpc.IsAvailable)
-            _gbrIpc.SetAutoGatherEnabled(true);
-
-        _gbrPushNotification = "GBR 清单 base64 已复制到剪贴板\n在 GBR AutoGather 列表中右键 → 粘贴导入";
-        _log.Information("GBR 推送完成 (base64)");
+        var count = deficitMap?.Count ?? materials.Count(m => m.Source == MaterialSource.Gatherable);
+        var suffix = _config.OnlyMissingMaterials ? $"（仅缺失 {count} 种）" : "";
+        _gbrPushNotification = $"GBR 采集清单{suffix}已复制到剪贴板\n在 GBR AutoGather 列表中右键 → 粘贴导入";
+        _log.Information($"GBR 推送完成 (base64, onlyMissing={_config.OnlyMissingMaterials}, hqOnly={_config.HqOnly})");
     }
 
     public void DrawGbrNotification()
     {
-        if (_gbrPushNotification is null) return;
-        ImGui.Separator();
+        if (_gbrPushNotification is null)
+        {
+            ImGui.TextColored(ColorGray, "点击左侧按钮\n复制 GBR 采集清单");
+            return;
+        }
         ImGui.TextColored(ColorGreen, "✅ GBR 推送结果:");
         ImGui.TextWrapped(_gbrPushNotification);
         if (ImGui.SmallButton("关闭提示###DismissGbrNote"))
@@ -418,19 +466,18 @@ public sealed class MaterialListWidget
 
     public void DrawCraftWithArtisanButton(List<CraftStep> steps, List<MaterialEntry>? materials = null)
     {
-        // 轮询逻辑已迁移到 CraftProgressWindow
+        float btnWidth = ImGui.GetContentRegionAvail().X;
 
         bool artisanAvailable = _ipcChecker.IsArtisanAvailable();
         if (!artisanAvailable) ImGui.BeginDisabled();
 
-        if (ImGui.Button("一键 Artisan 制作###CraftWithArtisan"))
+        if (ImGui.Button("一键 Artisan 制作###CraftWithArtisan", new Vector2(btnWidth, 0)))
             CraftWithArtisan(steps, materials);
 
         if (!artisanAvailable)
         {
             ImGui.EndDisabled();
-            ImGui.SameLine();
-            if (ImGui.Button("重新检测 Artisan###RescanArtisan"))
+            if (ImGui.Button("重新检测###RescanArtisan", new Vector2(btnWidth, 0)))
             {
                 bool nowAvailable = _artisanIpc.TryResubscribe();
                 _log.Information($"Artisan 重新检测结果: {(nowAvailable ? "可用" : "不可用")}");
@@ -450,7 +497,6 @@ public sealed class MaterialListWidget
         if (steps.Count == 0) { _log.Information("无制作步骤"); return; }
         if (!_artisanIpc.IsAvailable) { _log.Warning("Artisan 不可用"); return; }
 
-        // 检测材料是否齐全
         if (materials is not null && materials.Count > 0)
         {
             var inv = InventoryHelper.CheckInventory(materials);
@@ -467,40 +513,90 @@ public sealed class MaterialListWidget
         _progressManager.Start(steps);
         _artisanIpc.SetEnduranceStatus(true);
 
-        // 通过回调通知外部启动制作（不再直接推送步骤）
         OnStartCrafting?.Invoke(steps);
     }
 
     // ================================================================
-    //  BOM 树视图（不变）
+    //  BOM 树视图
     // ================================================================
 
     public void DrawTree(BomNode root)
     {
         if (root is null) return;
+        _bomRoot = root;
+
+        // 树视图同步"仅缺失材料"：动态计算有效需求，useHq 联动"仅计HQ"
+        Dictionary<uint, int>? effectiveNeeds = null;
+        if (_config.OnlyMissingMaterials)
+        {
+            bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
+            effectiveNeeds = InventoryHelper.CalculateEffectiveNeeds(root, useHq);
+        }
+
         ImGui.BeginChild("BomTreeView");
         _treeNodeIdCounter = 0;
-        DrawTreeNode(root, true);
+        DrawTreeNode(root, effectiveNeeds, 1.0, true);
         ImGui.EndChild();
     }
 
-    private void DrawTreeNode(BomNode node, bool startOpen)
+    private void DrawTreeNode(BomNode node, Dictionary<uint, int>? effectiveNeeds, double scale, bool startOpen)
     {
         var flags = ImGuiTreeNodeFlags.SpanAvailWidth;
         if (node.Children.Count == 0)
             flags |= ImGuiTreeNodeFlags.Leaf | ImGuiTreeNodeFlags.NoTreePushOnOpen;
         if (startOpen) flags |= ImGuiTreeNodeFlags.DefaultOpen;
 
-        string label = node.ItemId == 0
-            ? node.ItemName
-            : $"{node.ItemName} ×{node.Quantity}";
-        if (node.IsIncomplete) label += " [不完整]";
+        // 计算实际需求量
+        int rawQty = node.Quantity;
+        bool showingDeficit = effectiveNeeds is not null;
 
-        bool isOpen = ImGui.TreeNodeEx($"###BomNode_{_treeNodeIdCounter++}", flags, label);
-        if (isOpen && node.Children.Count > 0)
+        if (showingDeficit && node.IsLeaf && node.ItemId != 0)
+        {
+            // 叶节点：查 effectiveNeeds 获取调整后的需求
+            if (effectiveNeeds!.TryGetValue(node.ItemId, out int need))
+                rawQty = need;
+            else
+                rawQty = 0; // 被半成品完全覆盖
+        }
+        else if (showingDeficit && !node.IsLeaf && node.ItemId != 0)
+        {
+            // 半成品：查背包库存显示扣减后信息（始终用 HQ+NQ）
+            int owned = InventoryHelper.GetItemCount(node.ItemId, false);
+            rawQty = (int)Math.Ceiling(node.Quantity * scale);
+            if (owned > 0)
+            {
+                int remaining = Math.Max(0, rawQty - owned);
+                string ownedStr = $"已有 {owned}";
+                string label = node.ItemId == 0
+                    ? node.ItemName
+                    : $"{node.ItemName} ×{remaining} (需{rawQty} {ownedStr})";
+                if (node.IsIncomplete) label += " [不完整]";
+                bool isOpen = ImGui.TreeNodeEx($"###BomNode_{_treeNodeIdCounter++}", flags, label);
+                if (isOpen && node.Children.Count > 0)
+                {
+                    double childScale = rawQty > 0 ? scale * ((double)remaining / rawQty) : 0;
+                    foreach (var child in node.Children)
+                        DrawTreeNode(child, effectiveNeeds, childScale, false);
+                    ImGui.TreePop();
+                }
+                return;
+            }
+        }
+
+        // 默认标签
+        string defaultLabel = node.ItemId == 0
+            ? node.ItemName
+            : $"{node.ItemName} ×{rawQty}";
+        if (node.IsIncomplete) defaultLabel += " [不完整]";
+
+        if (showingDeficit && rawQty == 0 && node.IsLeaf)
+            defaultLabel += " ✓(已覆盖)";
+
+        bool isNodeOpen = ImGui.TreeNodeEx($"###BomNode_{_treeNodeIdCounter++}", flags, defaultLabel);
+        if (isNodeOpen && node.Children.Count > 0)
         {
             foreach (var child in node.Children)
-                DrawTreeNode(child, false);
+                DrawTreeNode(child, effectiveNeeds, scale, false);
             ImGui.TreePop();
         }
     }

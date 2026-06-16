@@ -13,7 +13,7 @@ namespace CraftFlow.Config;
 [Serializable]
 public class PluginConfig : IPluginConfiguration
 {
-    private readonly IDalamudPluginInterface _pluginInterface;
+    private IDalamudPluginInterface _pluginInterface;
 
     /// <summary>
     /// 配置版本号，用于 Dalamud IPluginConfiguration 接口。
@@ -41,6 +41,17 @@ public class PluginConfig : IPluginConfiguration
     public bool ShowCrystals { get; set; } = false;
 
     /// <summary>
+    /// GBR 推送时是否只推送缺失材料（扣除背包已有量，含半成品）。
+    /// </summary>
+    public bool OnlyMissingMaterials { get; set; } = false;
+
+    /// <summary>
+    /// 计算已有材料时是否只计 HQ 物品。联动 OnlyMissingMaterials，
+    /// 勾选后 NQ 物品不计入已有量，差额需用 HQ 补足。
+    /// </summary>
+    public bool HqOnly { get; set; } = false;
+
+    /// <summary>
     /// 用户收藏的装备预设列表。
     /// </summary>
     public List<FavoritePreset> FavoritePresets { get; set; } = [];
@@ -57,7 +68,15 @@ public class PluginConfig : IPluginConfiguration
     public PluginConfig(IDalamudPluginInterface pluginInterface)
     {
         _pluginInterface = pluginInterface;
-        Load();
+        LoadSafe();
+    }
+
+    /// <summary>
+    /// 无参构造器，供 Dalamud JSON 反序列化使用。
+    /// </summary>
+    public PluginConfig()
+    {
+        _pluginInterface = null!;
     }
 
     /// <summary>
@@ -65,23 +84,36 @@ public class PluginConfig : IPluginConfiguration
     /// </summary>
     public void Save()
     {
+        if (_pluginInterface is null) return;
         _pluginInterface.SavePluginConfig(this);
     }
 
     /// <summary>
-    /// 从持久化存储加载配置，若无则使用默认值。
+    /// 安全加载配置，反序列化失败时使用默认值不崩溃。
     /// </summary>
-    private void Load()
+    private void LoadSafe()
     {
-        var saved = _pluginInterface.GetPluginConfig() as PluginConfig;
-        if (saved is not null)
+        try
         {
-            DefaultVersion = saved.DefaultVersion;
-            WindowPosition = saved.WindowPosition;
-            IsWindowLocked = saved.IsWindowLocked;
-            ShowCrystals = saved.ShowCrystals;
-            FavoritePresets = saved.FavoritePresets ?? [];
-            CraftProgress = saved.CraftProgress;
+            var saved = _pluginInterface.GetPluginConfig() as PluginConfig;
+            if (saved is not null) CopyFrom(saved);
         }
+        catch (Exception ex)
+        {
+            // 反序列化失败（如模型变更导致旧 JSON 不兼容），使用默认值
+            System.Diagnostics.Debug.WriteLine($"[CraftFlow] 配置加载失败，使用默认值: {ex.Message}");
+        }
+    }
+
+    private void CopyFrom(PluginConfig saved)
+    {
+        DefaultVersion = saved.DefaultVersion;
+        WindowPosition = saved.WindowPosition;
+        IsWindowLocked = saved.IsWindowLocked;
+        ShowCrystals = saved.ShowCrystals;
+        OnlyMissingMaterials = saved.OnlyMissingMaterials;
+        HqOnly = saved.HqOnly;
+        FavoritePresets = saved.FavoritePresets ?? [];
+        CraftProgress = saved.CraftProgress;
     }
 }

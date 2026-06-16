@@ -20,7 +20,9 @@ public static class GbrListHelper
     /// 生成 GBR 兼容的压缩 base64 清单字符串。
     /// 用户在 GBR AutoGather 列表中右键 → 粘贴 即可导入。
     /// </summary>
-    public static string ToGbrBase64(List<MaterialEntry> materials)
+    /// <param name="materials">材料清单。</param>
+    /// <param name="deficitMap">可选：以 ItemId 为键的差额字典。传入后只输出差额 > 0 的采集材料，数量使用差额值。</param>
+    public static string ToGbrBase64(List<MaterialEntry> materials, Dictionary<uint, int>? deficitMap = null)
     {
         var gatherable = materials
             .Where(m => m.Source == MaterialSource.Gatherable)
@@ -29,10 +31,27 @@ public static class GbrListHelper
         if (gatherable.Count == 0)
             return "";
 
+        // 如果提供了差额表，过滤为仅差额 > 0 的材料，并使用差额数量
+        List<(uint ItemId, string ItemName, int Quantity)> items;
+        if (deficitMap != null)
+        {
+            items = gatherable
+                .Where(m => deficitMap.TryGetValue(m.ItemId, out int deficit) && deficit > 0)
+                .Select(m => (m.ItemId, m.ItemName, deficitMap[m.ItemId]))
+                .ToList();
+        }
+        else
+        {
+            items = gatherable.Select(m => (m.ItemId, m.ItemName, m.TotalRequired)).ToList();
+        }
+
+        if (items.Count == 0)
+            return "";
+
         // 构建 JSON（匹配 GBR AutoGatherList.Config 格式）
-        var itemIds = "[" + string.Join(",", gatherable.Select(i => i.ItemId.ToString())) + "]";
-        var quantities = "{" + string.Join(",", gatherable.Select(i => $"\"{i.ItemId}\":{i.TotalRequired}")) + "}";
-        var enabledItems = "{" + string.Join(",", gatherable.Select(i => $"\"{i.ItemId}\":true")) + "}";
+        var itemIds = "[" + string.Join(",", items.Select(i => i.ItemId.ToString())) + "]";
+        var quantities = "{" + string.Join(",", items.Select(i => $"\"{i.ItemId}\":{i.Quantity}")) + "}";
+        var enabledItems = "{" + string.Join(",", items.Select(i => $"\"{i.ItemId}\":true")) + "}";
 
         var json = $@"{{""ItemIds"":{itemIds},""Quantities"":{quantities},""PrefferedLocations"":{{}},""EnabledItems"":{enabledItems},""Name"":""CraftFlow 采集"",""Description"":""由 CraftFlow 导出 ({DateTime.Now:yyyy-MM-dd HH:mm})"",""FolderPath"":"""",""Order"":0,""Enabled"":true,""Fallback"":false}}";
 
@@ -57,7 +76,9 @@ public static class GbrListHelper
     /// <summary>
     /// 生成可读文本清单（备选）。
     /// </summary>
-    public static string GenerateTextList(List<MaterialEntry> materials)
+    /// <param name="materials">材料清单。</param>
+    /// <param name="deficitMap">可选：差额字典。传入后只输出差额 > 0 的材料，数量使用差额值。</param>
+    public static string GenerateTextList(List<MaterialEntry> materials, Dictionary<uint, int>? deficitMap = null)
     {
         var gatherable = materials
             .Where(m => m.Source == MaterialSource.Gatherable)
@@ -66,11 +87,27 @@ public static class GbrListHelper
         if (gatherable.Count == 0)
             return "";
 
+        List<(string Name, int Qty)> items;
+        if (deficitMap != null)
+        {
+            items = gatherable
+                .Where(m => deficitMap.TryGetValue(m.ItemId, out int deficit) && deficit > 0)
+                .Select(m => (m.ItemName, deficitMap[m.ItemId]))
+                .ToList();
+        }
+        else
+        {
+            items = gatherable.Select(m => (m.ItemName, m.TotalRequired)).ToList();
+        }
+
+        if (items.Count == 0)
+            return "";
+
         var sb = new StringBuilder();
-        sb.AppendLine("CraftFlow 采集清单 — 共 " + gatherable.Count + " 种材料");
+        sb.AppendLine("CraftFlow 采集清单 — 共 " + items.Count + " 种材料");
         sb.AppendLine();
-        foreach (var mat in gatherable)
-            sb.AppendLine(mat.ItemName + "  ×" + mat.TotalRequired);
+        foreach (var item in items)
+            sb.AppendLine(item.Name + "  ×" + item.Qty);
         sb.AppendLine();
         sb.AppendLine("在 GBR AutoGather 列表右键 → 粘贴导入");
         return sb.ToString();

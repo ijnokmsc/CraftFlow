@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
     private readonly ArtisanIpcClient _artisanIpc;
     private readonly IpcAvailabilityChecker _ipcChecker;
     private readonly IPluginLog _log;
+    private readonly LuminaCache _luminaCache;
 
     private readonly EquipmentTab _equipmentTab;
     private readonly ConsumableTab _consumableTab;
@@ -57,6 +58,7 @@ public sealed class MainWindow : Window
         CraftProgressManager progressManager,
         CraftProgressWindow craftProgressWindow,
         JobIconService jobIconService,
+        LuminaCache luminaCache,
         IPluginLog log)
         : base("CraftFlow###CraftFlowMainWindow")
     {
@@ -75,9 +77,10 @@ public sealed class MainWindow : Window
         _progressManager = progressManager;
         _craftProgressWindow = craftProgressWindow;
         _log = log;
+        _luminaCache = luminaCache;
         _jobIconService = jobIconService;
 
-        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, log);
+        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log);
         // 设置制作开始回调：显示进度窗口，隐藏主窗口
         materialListWidget.OnStartCrafting = (steps) =>
         {
@@ -91,7 +94,7 @@ public sealed class MainWindow : Window
 
         _consumableTab = new ConsumableTab(
             bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
-            materialListWidget, config, log);
+            materialListWidget, config, luminaCache, log);
 
         _favoritesTab = new FavoritesTab(presetService, () => _equipmentTab.GetSelectedTargets(), log);
         _favoritesTab.SetTargetLoadedCallback((targets, name) =>
@@ -124,8 +127,8 @@ public sealed class MainWindow : Window
 
         _statusBar = new StatusBarWidget(gbrIpc, artisanIpc, log);
 
-        Size = new Vector2(800, 600);
-        SizeCondition = ImGuiCond.FirstUseEver;
+        Size = new Vector2(850, 600);
+        SizeCondition = ImGuiCond.Once;
     }
 
     public override void Draw()
@@ -159,7 +162,8 @@ public sealed class MainWindow : Window
 
     private void DrawContentArea()
     {
-        float leftWidth = ImGui.GetContentRegionAvail().X * 0.4f;
+        float leftWidth = ImGui.GetContentRegionAvail().X * 0.45f;
+        float rightWidth = ImGui.GetContentRegionAvail().X * 0.53f;
         float contentHeight = ImGui.GetContentRegionAvail().Y - 35f;
 
         ImGui.BeginChild("LeftPanel", new Vector2(leftWidth, contentHeight), true);
@@ -182,7 +186,7 @@ public sealed class MainWindow : Window
 
         ImGui.SameLine();
 
-        ImGui.BeginChild("RightPanel", new Vector2(0, contentHeight), true);
+        ImGui.BeginChild("RightPanel", new Vector2(rightWidth, contentHeight), true);
         switch (_currentTab)
         {
             case TabType.Equipment:

@@ -2,12 +2,23 @@ namespace CraftFlow.Data.Models;
 
 /// <summary>
 /// 装备选择项，用于收藏预设中保存的单个装备条目。
+/// 必须是 class（非 record），否则 JSON 反序列化因缺少无参构造器而失败。
 /// </summary>
-public record EquipmentSelection(
-    uint ItemId,
-    string ItemName,
-    int Quantity
-);
+public sealed class EquipmentSelection
+{
+    public uint ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public int Quantity { get; set; }
+
+    public EquipmentSelection() { }
+
+    public EquipmentSelection(uint itemId, string itemName, int quantity)
+    {
+        ItemId = itemId;
+        ItemName = itemName;
+        Quantity = quantity;
+    }
+}
 
 /// <summary>
 /// 用户收藏预设，包含一组装备选择项和元信息。
