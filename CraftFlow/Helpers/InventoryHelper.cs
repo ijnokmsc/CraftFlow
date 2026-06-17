@@ -85,6 +85,7 @@ public static class InventoryHelper
     /// 基于 BOM 树计算有效材料需求，考虑背包中已有半成品（中间产品）。
     /// 遍历 BOM 树时，如果某个非叶节点（半成品）在背包中已有库存，
     /// 则按比例减少其下级材料的需求量。
+    /// 跨分支共享的中间产物库存会被追踪消费，避免不同分支重复扣减同一批库存。
     /// </summary>
     /// <param name="root">BOM 树根节点。</param>
     /// <param name="hqOnly">是否只计 HQ 物品为已有。</param>
@@ -92,21 +93,34 @@ public static class InventoryHelper
     public static Dictionary<uint, int> CalculateEffectiveNeeds(BomNode root, bool hqOnly)
     {
         var needs = new Dictionary<uint, int>();
-        WalkForEffectiveNeeds(root, needs, hqOnly, 1.0);
+        var inventoryConsumed = new Dictionary<uint, int>();
+        WalkForEffectiveNeeds(root, needs, hqOnly, 1.0, inventoryConsumed);
         return needs;
     }
 
     /// <summary>
     /// 递归遍历 BOM 树计算有效需求。
     /// 对非叶节点（半成品），检查背包已有量并按比例缩减下级需求。
+    /// inventoryConsumed 跨分支追踪已消费的中间产物库存，防止组合 BOM 树中
+    /// 不同分支的同一中间产物重复扣减同一批库存。
     /// </summary>
-    private static void WalkForEffectiveNeeds(BomNode node, Dictionary<uint, int> needs, bool hqOnly, double scale)
+    private static void WalkForEffectiveNeeds(BomNode node, Dictionary<uint, int> needs,
+        bool hqOnly, double scale, Dictionary<uint, int> inventoryConsumed)
     {
         // 根节点（ItemId == 0）：直接递归子节点
         if (node.ItemId == 0)
         {
             foreach (var child in node.Children)
-                WalkForEffectiveNeeds(child, needs, hqOnly, 1.0);
+                WalkForEffectiveNeeds(child, needs, hqOnly, 1.0, inventoryConsumed);
+            return;
+        }
+
+        // 成品/顶层节点（Depth == 0）：最终产物，不扣成品背包库存，直接递归子节点
+        // 只有中间产物（半成品）的库存才应该抵扣下级材料需求。
+        if (node.Depth == 0)
+        {
+            foreach (var child in node.Children)
+                WalkForEffectiveNeeds(child, needs, hqOnly, 1.0, inventoryConsumed);
             return;
         }
 
@@ -121,18 +135,35 @@ public static class InventoryHelper
             return;
         }
 
-        // 非叶节点：半成品（中间产品），检查背包已有量
+        // 非叶节点（Depth > 0）：半成品（中间产品），检查背包已有量（扣除前序分支已消费量）
         int totalNeeded = Math.Max(1, (int)Math.Ceiling(node.Quantity * scale));
         int owned = GetItemCount(node.ItemId, hqOnly);
+
+        // 扣除其他分支已消费的库存，防止共享中间产物被重复扣减
+        if (owned > 0 && inventoryConsumed.TryGetValue(node.ItemId, out int alreadyConsumed))
+        {
+            owned = Math.Max(0, owned - alreadyConsumed);
+        }
+
         int stillNeeded = owned < 0 ? totalNeeded : Math.Max(0, totalNeeded - owned);
 
+        // 记录本次消费量（含已由前序分支消费量）
+        int consumedThisBranch = totalNeeded - stillNeeded;
+        if (consumedThisBranch > 0)
+        {
+            if (inventoryConsumed.TryGetValue(node.ItemId, out int prev))
+                inventoryConsumed[node.ItemId] = prev + consumedThisBranch;
+            else
+                inventoryConsumed[node.ItemId] = consumedThisBranch;
+        }
+
         if (stillNeeded == 0)
-            return; // 已有量充足，跳过整棵子树
+            return; // 已有量（扣除已消费后）充足，跳过整棵子树
 
         // 按缩减比例递归处理下级材料
         double childScale = scale * ((double)stillNeeded / totalNeeded);
         foreach (var child in node.Children)
-            WalkForEffectiveNeeds(child, needs, hqOnly, childScale);
+            WalkForEffectiveNeeds(child, needs, hqOnly, childScale, inventoryConsumed);
     }
 
     /// <summary>

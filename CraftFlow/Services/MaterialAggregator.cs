@@ -23,14 +23,29 @@ public sealed class MaterialAggregator
     private const uint CrystalUICategoryId = 59;
 
     /// <summary>
-    /// 初始化 MaterialAggregator 实例。
+    /// 已知水晶/晶簇的英文名称集合（精确匹配，用于无 LuminaCache 时的回退判断）。
+    /// 使用精确集合匹配代替 Contains("crystal")，避免误杀 Crystal Glass / Crystal Ring 等含 crystal 的非晶簇物品。
+    /// </summary>
+    private static readonly HashSet<string> KnownCrystalNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // 水晶（Crystal）
+        "Wind Crystal", "Fire Crystal", "Ice Crystal", "Earth Crystal",
+        "Lightning Crystal", "Water Crystal",
+        // 晶簇（Cluster）
+        "Wind Cluster", "Fire Cluster", "Ice Cluster", "Earth Cluster",
+        "Lightning Cluster", "Water Cluster",
+    };
+
+    /// <summary>
+    /// 初始化 MaterialAggregator 实例（无 LuminaCache）。
+    /// 水晶/晶簇过滤仅依靠 KnownCrystalNames 集合精确匹配，无法使用 ItemUICategory 判断。
     /// </summary>
     /// <param name="recipeRepo">配方查询仓库，用于获取材料来源。</param>
     /// <param name="log">插件日志。</param>
     public MaterialAggregator(RecipeRepository recipeRepo, IPluginLog log)
     {
         _recipeRepo = recipeRepo;
-        _cache = null!; // 兼容旧构造函数，LuminaCache 可通过 RecipeRepo 间接访问
+        _cache = null!; // 兼容无 LuminaCache 场景，IsCrystalOrCluster 回退到 KnownCrystalNames 集合
         _log = log;
     }
 
@@ -113,7 +128,7 @@ public sealed class MaterialAggregator
 
     /// <summary>
     /// 判断材料是否为水晶/晶簇。
-    /// 优先按 ItemUICategory RowId==59 过滤，辅助按名称含"晶簇"/"Crystal"过滤。
+    /// 优先按 ItemUICategory RowId==59 过滤，回退按 KnownCrystalNames 集合精确匹配。
     /// </summary>
     /// <param name="itemId">物品 ID。</param>
     /// <param name="itemName">物品名称。</param>
@@ -129,14 +144,10 @@ public sealed class MaterialAggregator
             }
         }
 
-        // 辅助按名称判断
-        if (!string.IsNullOrEmpty(itemName))
+        // 回退按已知名称集合精确匹配（避免 Contains("crystal") 误杀 Crystal Glass 等）
+        if (!string.IsNullOrEmpty(itemName) && KnownCrystalNames.Contains(itemName))
         {
-            var nameLower = itemName.ToLowerInvariant();
-            if (nameLower.Contains("晶簇") || nameLower.Contains("crystal"))
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;

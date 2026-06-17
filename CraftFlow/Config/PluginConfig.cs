@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Text.Json.Serialization;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
 using CraftFlow.Data.Models;
@@ -13,6 +14,12 @@ namespace CraftFlow.Config;
 [Serializable]
 public class PluginConfig : IPluginConfiguration
 {
+    /// <summary>
+    /// Dalamud 插件接口引用，不参与序列化。
+    /// 双重 JsonIgnore 防止任何序列化器意外序列化此字段。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    [Newtonsoft.Json.JsonIgnore]
     private IDalamudPluginInterface _pluginInterface;
 
     /// <summary>
@@ -73,30 +80,58 @@ public class PluginConfig : IPluginConfiguration
 
     /// <summary>
     /// 无参构造器，供 Dalamud JSON 反序列化使用。
+    /// 显式初始化所有属性为安全默认值，确保即使 JSON 反序列化
+    /// 部分失败或抛出异常，实例也是完整可用的。
     /// </summary>
     public PluginConfig()
     {
+        // 显式初始化所有属性，不依赖自动属性初始化器
+        // ——在部分反序列化场景下，属性可能已被覆写为无效值，
+        // 这里确保最基础的字段安全。
+        Version = 1;
+        DefaultVersion = 7;
+        WindowPosition = Vector2.Zero;
+        IsWindowLocked = false;
+        ShowCrystals = false;
+        OnlyMissingMaterials = false;
+        HqOnly = false;
+        FavoritePresets = [];
+        CraftProgress = null;
         _pluginInterface = null!;
     }
 
     /// <summary>
     /// 将当前配置保存到持久化存储。
+    /// 当 _pluginInterface 不可用时（如无参构造器实例）安全跳过。
     /// </summary>
     public void Save()
     {
         if (_pluginInterface is null) return;
-        _pluginInterface.SavePluginConfig(this);
+        try
+        {
+            _pluginInterface.SavePluginConfig(this);
+        }
+        catch (Exception ex)
+        {
+            // 保存失败不应导致插件崩溃，静默记录
+            System.Diagnostics.Debug.WriteLine($"[CraftFlow] 配置保存失败: {ex.Message}");
+        }
     }
 
     /// <summary>
-    /// 安全加载配置，反序列化失败时使用默认值不崩溃。
+    /// 安全加载配置：捕获所有异常，_pluginInterface 为 null 时跳过，
+    /// GetPluginConfig 返回 null 时保留默认值。
     /// </summary>
     private void LoadSafe()
     {
+        if (_pluginInterface is null) return;
         try
         {
             var saved = _pluginInterface.GetPluginConfig() as PluginConfig;
-            if (saved is not null) CopyFrom(saved);
+            if (saved is not null)
+            {
+                CopyFrom(saved);
+            }
         }
         catch (Exception ex)
         {
@@ -105,15 +140,30 @@ public class PluginConfig : IPluginConfiguration
         }
     }
 
+    /// <summary>
+    /// 从已保存的配置实例复制所有属性值。
+    /// 每个属性独立赋值，单个赋值失败不影响其他属性。
+    /// </summary>
+    /// <param name="saved">已保存的配置实例。</param>
     private void CopyFrom(PluginConfig saved)
     {
-        DefaultVersion = saved.DefaultVersion;
-        WindowPosition = saved.WindowPosition;
-        IsWindowLocked = saved.IsWindowLocked;
-        ShowCrystals = saved.ShowCrystals;
-        OnlyMissingMaterials = saved.OnlyMissingMaterials;
-        HqOnly = saved.HqOnly;
-        FavoritePresets = saved.FavoritePresets ?? [];
-        CraftProgress = saved.CraftProgress;
+        if (saved is null) return;
+        try
+        {
+            Version = saved.Version;
+            DefaultVersion = saved.DefaultVersion;
+            WindowPosition = saved.WindowPosition;
+            IsWindowLocked = saved.IsWindowLocked;
+            ShowCrystals = saved.ShowCrystals;
+            OnlyMissingMaterials = saved.OnlyMissingMaterials;
+            HqOnly = saved.HqOnly;
+            FavoritePresets = saved.FavoritePresets ?? [];
+            CraftProgress = saved.CraftProgress;
+        }
+        catch (Exception ex)
+        {
+            // 单个属性赋值失败不应中断整体加载
+            System.Diagnostics.Debug.WriteLine($"[CraftFlow] CopyFrom 失败，保留默认值: {ex.Message}");
+        }
     }
 }

@@ -42,6 +42,24 @@ public sealed class MainWindow : Window
 
     private TabType _currentTab = TabType.Equipment;
 
+    // 通知日志
+    private readonly List<LogEntry> _notificationLog = new();
+    private bool _logExpanded;
+    private const int MaxLogEntries = 200;
+
+    private static string GetVersionString()
+    {
+        try
+        {
+            var ver = typeof(Plugin).Assembly.GetName().Version;
+            return $"v{ver?.Major}.{ver?.Minor}.{ver?.Build}";
+        }
+        catch
+        {
+            return "v?.?.?";
+        }
+    }
+
     public MainWindow(
         Plugin plugin,
         BomExpander bomExpander,
@@ -60,17 +78,8 @@ public sealed class MainWindow : Window
         JobIconService jobIconService,
         LuminaCache luminaCache,
         IPluginLog log)
-        : base("CraftFlow###CraftFlowMainWindow")
+        : base($"CraftFlow {GetVersionString()}###CraftFlowMainWindow")
     {
-        try
-        {
-            var ver = typeof(Plugin).Assembly.GetName().Version;
-            WindowName = $"CraftFlow v{ver?.Major}.{ver?.Minor}.{ver?.Build}###CraftFlowMainWindow";
-        }
-        catch
-        {
-            // 如果读取版本失败，使用默认标题
-        }
         _plugin = plugin;
         _bomExpander = bomExpander;
         _materialAggregator = materialAggregator;
@@ -89,7 +98,7 @@ public sealed class MainWindow : Window
         _luminaCache = luminaCache;
         _jobIconService = jobIconService;
 
-        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log);
+        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log, this);
         // 设置制作开始回调：显示进度窗口，隐藏主窗口
         materialListWidget.OnStartCrafting = (steps) =>
         {
@@ -142,10 +151,10 @@ public sealed class MainWindow : Window
 
     public override void Draw()
     {
-        // 不再有进度面板的特殊处理 — 进度窗口是独立的弹窗
         DrawTabBar();
         DrawContentArea();
         DrawStatusBar();
+        // DrawLogPanel(); // 通知日志面板已移除
     }
 
     private void DrawTabBar()
@@ -173,7 +182,7 @@ public sealed class MainWindow : Window
     {
         float leftWidth = ImGui.GetContentRegionAvail().X * 0.45f;
         float rightWidth = ImGui.GetContentRegionAvail().X * 0.53f;
-        float contentHeight = ImGui.GetContentRegionAvail().Y - 35f;
+        float contentHeight = ImGui.GetContentRegionAvail().Y - 55f;
 
         ImGui.BeginChild("LeftPanel", new Vector2(leftWidth, contentHeight), true);
         switch (_currentTab)
@@ -246,5 +255,72 @@ public sealed class MainWindow : Window
         }
 
         _statusBar.Draw();
+    }
+
+    private void DrawLogPanel()
+    {
+        ImGui.Separator();
+
+        bool expanded = ImGui.CollapsingHeader("通知日志", ImGuiTreeNodeFlags.DefaultOpen);
+        if (expanded != _logExpanded)
+        {
+            _logExpanded = expanded;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("清空") && _notificationLog.Count > 0)
+        {
+            _notificationLog.Clear();
+        }
+
+        if (!_logExpanded) return;
+
+        var availHeight = ImGui.GetContentRegionAvail().Y;
+        var panelHeight = Math.Max(availHeight, 20f);
+
+        ImGui.BeginChild("LogContent", new Vector2(0, panelHeight), true);
+        foreach (var entry in _notificationLog)
+        {
+            var color = entry.Level switch
+            {
+                LogLevel.Success => new Vector4(0.3f, 0.9f, 0.3f, 1f),
+                LogLevel.Warning => new Vector4(1f, 0.85f, 0.2f, 1f),
+                LogLevel.Error => new Vector4(0.9f, 0.3f, 0.2f, 1f),
+                _ => new Vector4(0.85f, 0.85f, 0.85f, 1f)
+            };
+            ImGui.TextColored(color, $"[{entry.Time:HH:mm:ss}] {entry.Message}");
+        }
+        if (_notificationLog.Count > 0)
+            ImGui.SetScrollHereY(1.0f);
+        ImGui.EndChild();
+    }
+
+    public void AddLog(string message, LogLevel level = LogLevel.Info)
+    {
+        _notificationLog.Add(new LogEntry(DateTime.Now, message, level));
+        while (_notificationLog.Count > MaxLogEntries)
+            _notificationLog.RemoveAt(0);
+    }
+}
+
+public enum LogLevel
+{
+    Info,
+    Success,
+    Warning,
+    Error
+}
+
+public sealed class LogEntry
+{
+    public DateTime Time { get; }
+    public string Message { get; }
+    public LogLevel Level { get; }
+
+    public LogEntry(DateTime time, string message, LogLevel level)
+    {
+        Time = time;
+        Message = message;
+        Level = level;
     }
 }

@@ -23,6 +23,7 @@ public sealed class MaterialListWidget
     private readonly CraftProgressManager _progressManager;
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
+    private readonly MainWindow? _mainWindow;
 
     /// <summary>制作开始回调，由 MainWindow 设置。用于将制作流程委托给 CraftProgressWindow。</summary>
     public Action<List<CraftStep>>? OnStartCrafting { get; set; }
@@ -52,7 +53,8 @@ public sealed class MaterialListWidget
         IpcAvailabilityChecker ipcChecker,
         CraftProgressManager progressManager,
         PluginConfig config,
-        IPluginLog log)
+        IPluginLog log,
+        MainWindow? mainWindow = null)
     {
         _gbrIpc = gbrIpc;
         _artisanIpc = artisanIpc;
@@ -60,6 +62,7 @@ public sealed class MaterialListWidget
         _progressManager = progressManager;
         _config = config;
         _log = log;
+        _mainWindow = mainWindow;
     }
 
     // ================================================================
@@ -416,6 +419,8 @@ public sealed class MaterialListWidget
 
     private void PushToGbr(List<MaterialEntry> materials)
     {
+        _mainWindow?.AddLog($"推送 {materials.Count} 项到 GBR...", LogLevel.Info);
+
         // 优先复用已缓存的有效需求/差额数据
         Dictionary<uint, int>? deficitMap = null;
 
@@ -427,6 +432,7 @@ public sealed class MaterialListWidget
             {
                 _gbrPushNotification = "所有采集材料已齐全，无需采集";
                 _log.Information("GBR 推送: 所有采集材料已齐全");
+                _mainWindow?.AddLog("所有采集材料已齐全，无需推送", LogLevel.Success);
                 return;
             }
         }
@@ -436,6 +442,7 @@ public sealed class MaterialListWidget
         {
             _gbrPushNotification = null;
             _log.Information("无可采集材料需要推送");
+            _mainWindow?.AddLog("无可采集材料需要推送", LogLevel.Warning);
             return;
         }
 
@@ -445,6 +452,7 @@ public sealed class MaterialListWidget
         var suffix = _config.OnlyMissingMaterials ? $"（仅缺失 {count} 种）" : "";
         _gbrPushNotification = $"GBR 采集清单{suffix}已复制到剪贴板\n在 GBR AutoGather 列表中右键 → 粘贴导入";
         _log.Information($"GBR 推送完成 (base64, onlyMissing={_config.OnlyMissingMaterials}, hqOnly={_config.HqOnly})");
+        _mainWindow?.AddLog($"GBR 采集清单{suffix}已复制到剪贴板", LogLevel.Success);
     }
 
     public void DrawGbrNotification()
@@ -535,11 +543,14 @@ public sealed class MaterialListWidget
 
         ImGui.BeginChild("BomTreeView");
         _treeNodeIdCounter = 0;
-        DrawTreeNode(root, effectiveNeeds, 1.0, true);
+        // 跨分支库存消费追踪，防止组合 BOM 树中共享中间产物被重复扣减
+        var inventoryConsumed = new Dictionary<uint, int>();
+        DrawTreeNode(root, effectiveNeeds, 1.0, true, inventoryConsumed);
         ImGui.EndChild();
     }
 
-    private void DrawTreeNode(BomNode node, Dictionary<uint, int>? effectiveNeeds, double scale, bool startOpen)
+    private void DrawTreeNode(BomNode node, Dictionary<uint, int>? effectiveNeeds, double scale,
+        bool startOpen, Dictionary<uint, int> inventoryConsumed)
     {
         var flags = ImGuiTreeNodeFlags.SpanAvailWidth;
         if (node.Children.Count == 0)
@@ -552,20 +563,52 @@ public sealed class MaterialListWidget
 
         if (showingDeficit && node.IsLeaf && node.ItemId != 0)
         {
-            // 叶节点：查 effectiveNeeds 获取调整后的需求
-            if (effectiveNeeds!.TryGetValue(node.ItemId, out int need))
-                rawQty = need;
-            else
-                rawQty = 0; // 被半成品完全覆盖
+            // 叶节点按本分支 scale × Quantity 计算需求量（不使用全局聚合的 effectiveNeeds，
+            // 否则所有同 ItemId 的叶节点会显示相同的全局总量，而非各自分支的实际量）。
+            rawQty = (int)Math.Ceiling(node.Quantity * scale);
+            if (rawQty < 0) rawQty = 0;
         }
         else if (showingDeficit && !node.IsLeaf && node.ItemId != 0)
         {
-            // 半成品：查背包库存显示扣减后信息（始终用 HQ+NQ）
+            // 成品/顶层节点（Depth == 0）：不扣成品背包库存
+            if (node.Depth == 0)
+            {
+                rawQty = (int)Math.Ceiling(node.Quantity * scale);
+                string label = $"{node.ItemName} ×{rawQty}";
+                if (node.IsIncomplete) label += " [不完整]";
+                bool isOpen = ImGui.TreeNodeEx($"###BomNode_{_treeNodeIdCounter++}", flags, label);
+                if (isOpen && node.Children.Count > 0)
+                {
+                    foreach (var child in node.Children)
+                        DrawTreeNode(child, effectiveNeeds, 1.0, false, inventoryConsumed);
+                    ImGui.TreePop();
+                }
+                return;
+            }
+
+            // 半成品（Depth > 0）：查背包库存显示扣减后信息（始终用 HQ+NQ）
             int owned = InventoryHelper.GetItemCount(node.ItemId, false);
+
+            // 扣除其他分支已消费的库存，防止共享中间产物重复扣减
+            if (owned > 0 && inventoryConsumed.TryGetValue(node.ItemId, out int alreadyConsumed))
+            {
+                owned = Math.Max(0, owned - alreadyConsumed);
+            }
+
             rawQty = (int)Math.Ceiling(node.Quantity * scale);
             if (owned > 0)
             {
                 int remaining = Math.Max(0, rawQty - owned);
+                int consumedThisBranch = rawQty - remaining;
+                if (consumedThisBranch > 0)
+                {
+                    if (inventoryConsumed.TryGetValue(node.ItemId, out int prev))
+                        inventoryConsumed[node.ItemId] = prev + consumedThisBranch;
+                    else
+                        inventoryConsumed[node.ItemId] = consumedThisBranch;
+                }
+
+                // owned 已扣除前序分支消费量，直接显示为本分支可用库存
                 string ownedStr = $"已有 {owned}";
                 string label = node.ItemId == 0
                     ? node.ItemName
@@ -576,7 +619,7 @@ public sealed class MaterialListWidget
                 {
                     double childScale = rawQty > 0 ? scale * ((double)remaining / rawQty) : 0;
                     foreach (var child in node.Children)
-                        DrawTreeNode(child, effectiveNeeds, childScale, false);
+                        DrawTreeNode(child, effectiveNeeds, childScale, false, inventoryConsumed);
                     ImGui.TreePop();
                 }
                 return;
@@ -596,7 +639,7 @@ public sealed class MaterialListWidget
         if (isNodeOpen && node.Children.Count > 0)
         {
             foreach (var child in node.Children)
-                DrawTreeNode(child, effectiveNeeds, scale, false);
+                DrawTreeNode(child, effectiveNeeds, scale, false, inventoryConsumed);
             ImGui.TreePop();
         }
     }

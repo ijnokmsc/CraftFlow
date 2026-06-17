@@ -232,7 +232,9 @@ public sealed class RecipeRepository
 
     /// <summary>
     /// 判断材料的来源类型。
-    /// 优先级：Gatherable > Purchasable > Drop > Craftable > Unknown。
+    /// 优先级：Craftable > Gatherable > Purchasable > Drop > Unknown。
+    /// 对于叶节点（原材料），Craftable 通常不成立，实际优先级为 Gatherable > Purchasable > Drop。
+    /// 注意：Drop 判断为排除法 — 物品存在但无法制作/采集/购买时，推断为怪物/副本掉落。
     /// </summary>
     /// <param name="itemId">物品 ID。</param>
     /// <returns>材料来源类型。</returns>
@@ -249,21 +251,20 @@ public sealed class RecipeRepository
             return MaterialSource.Craftable;
         }
 
-        // 判断是否可采集：通过 GatheringPoint/GatheringItem 数据
-        // 简化判断：检查物品的 ClassJobCategory 是否包含采集职业
-        // 实际需查询 GatheringPoint 表，此处用简化逻辑
+        // 判断是否可采集：通过 GatheringItem 表 + ItemUICategory 回退
         if (IsGatherableItem(item))
         {
             return MaterialSource.Gatherable;
         }
 
-        // 判断是否可购买：检查是否有商店价格
+        // 判断是否可购买：检查是否有商店价格（PriceMid 为商店售价）
         if (item.PriceMid > 0 || item.PriceLow > 0)
         {
             return MaterialSource.Purchasable;
         }
 
-        return MaterialSource.Unknown;
+        // 物品存在但无法制作/采集/购买 → 推断为怪物/副本掉落
+        return MaterialSource.Drop;
     }
 
     /// <summary>
@@ -428,7 +429,13 @@ public sealed class RecipeRepository
     /// <summary>
     /// 判断物品是否为可采集物品。
     /// 优先通过 Lumina GatheringItem 表判断（准确），回退到 ItemUICategory 分类判断。
+    /// 注意：GatheringItem 索引覆盖了绝大多数采集物，ID 范围回退仅在极少数边缘情况下触发。
     /// </summary>
+    /// <remarks>
+    /// 版本维护提醒：以下硬编码的 ItemUICategory RowId 范围基于 7.x Dawntrail。
+    /// 当新资料片（8.x+）发布后，如果新增采集物分类，需要同步更新此范围。
+    /// 验证方法：在游戏中查询新采集物的 ItemUICategory，确认其 RowId 是否已在范围内。
+    /// </remarks>
     private bool IsGatherableItem(Item item)
     {
         // 优先通过 GatheringItem 表判断：如果物品是采集点的产出物，则为可采集
@@ -441,11 +448,13 @@ public sealed class RecipeRepository
         if (!item.ItemUICategory.IsValid) return false;
         var catId = item.ItemUICategory.Value.RowId;
 
-        // 采集材料常见分类 ID（7.x Dawntrail）
-        // 3-18: 矿石/木材/纤维/皮革等原材料
-        // 20-32: 金属锭/石材/染料等
-        // 38: 鱼类
-        // 58-62: 采集物（兼容旧范围）
+        // === 版本相关硬编码开始 (7.x Dawntrail) ===
+        // 采集材料常见分类 ID：
+        //   3-18: 矿石/木材/纤维/皮革等原材料
+        //  20-32: 金属锭/石材/染料等
+        //     38: 鱼类
+        //  58-62: 采集物（兼容旧范围）
+        // === 版本相关硬编码结束 ===
         return (catId >= 3 && catId <= 18)
             || (catId >= 20 && catId <= 32)
             || catId == 38
