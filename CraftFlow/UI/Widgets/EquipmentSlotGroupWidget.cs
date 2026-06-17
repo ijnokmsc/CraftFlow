@@ -1,10 +1,12 @@
 using System;
+using System.Numerics;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using CraftFlow.Data.Models;
 using CraftFlow.Helpers;
+using CraftFlow.Services;
 
 namespace CraftFlow.UI.Widgets;
 
@@ -15,15 +17,17 @@ namespace CraftFlow.UI.Widgets;
 public sealed class EquipmentSlotGroupWidget
 {
     private readonly EquipmentSlotIcon _slotIcon;
+    private readonly ItemIconService _itemIconService;
     private readonly IPluginLog _log;
 
     /// <summary>
     /// 初始化 EquipmentSlotGroupWidget 实例。
     /// </summary>
     /// <param name="log">插件日志。</param>
-    public EquipmentSlotGroupWidget(IPluginLog log)
+    public EquipmentSlotGroupWidget(IPluginLog log, ItemIconService itemIconService)
     {
         _slotIcon = new EquipmentSlotIcon();
+        _itemIconService = itemIconService;
         _log = log;
     }
 
@@ -90,11 +94,13 @@ public sealed class EquipmentSlotGroupWidget
 
                 ImGui.SameLine();
 
-                // 装备名称 + ILvl + HQ 标记
+                                // 装备名称 + ILvl + HQ 标记
                 string hqLabel = item.IsHq ? " ★" : "";
                 var nameColor = isSelected
                     ? new System.Numerics.Vector4(0.2f, 0.9f, 0.2f, 1f)
                     : new System.Numerics.Vector4(1f, 1f, 1f, 1f);
+                var itemIcon = _itemIconService.GetItemIcon(item.ItemId);
+                if (itemIcon.Handle != 0) { ImGui.Image(itemIcon, new Vector2(20, 20)); ImGui.SameLine(); }
                 ImGui.TextColored(nameColor, $"{item.ItemName}{hqLabel}");
                 ImGui.SameLine();
                 ImGui.TextColored(new System.Numerics.Vector4(0.6f, 0.6f, 0.6f, 1f), $"IL{item.ItemLevel}");

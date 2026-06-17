@@ -45,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly CraftProgressManager _progressManager;
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly JobIconService _jobIconService;
+    private readonly ItemIconService _itemIconService;
     private readonly MainWindow _mainWindow;
     private readonly WindowSystem _windowSystem;
     private readonly Action _openMainUiHandler;
@@ -92,6 +93,8 @@ public sealed class Plugin : IDalamudPlugin
         Log.Information($"[CraftFlow] PluginDirectory={pluginDir}");
         _jobIconService = new JobIconService(TextureProvider, pluginDir, Log);
 
+        _itemIconService = new ItemIconService(TextureProvider, _luminaCache, Log);
+
         // 进度弹窗（在 MainWindow 之前创建，因为 MainWindow 需要引用它）
         _craftProgressWindow = new CraftProgressWindow(_progressManager, _artisanIpc, Log);
 
@@ -112,6 +115,7 @@ public sealed class Plugin : IDalamudPlugin
             _progressManager,
             _craftProgressWindow,
             _jobIconService,
+            _itemIconService,
             _luminaCache,
             Log
         );

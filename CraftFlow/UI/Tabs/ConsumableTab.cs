@@ -6,6 +6,7 @@ using Dalamud.Interface;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using CraftFlow.Config;
+using CraftFlow.Services;
 using CraftFlow.Data.GameData;
 using CraftFlow.Data.Models;
 using CraftFlow.Services;
@@ -28,7 +29,8 @@ public sealed class ConsumableTab
     private readonly MaterialListWidget _materialListWidget;
     private readonly PluginConfig _config;
     private readonly LuminaCache _luminaCache;
-    private readonly IPluginLog _log;
+        private readonly ItemIconService _itemIconService;
+private readonly IPluginLog _log;
 
     private string _searchFilter = string.Empty;
     private readonly List<CraftTarget> _selectedItems = [];
@@ -73,6 +75,7 @@ public sealed class ConsumableTab
         MaterialListWidget materialListWidget,
         PluginConfig config,
         LuminaCache luminaCache,
+        ItemIconService itemIconService,
         IPluginLog log)
     {
         _bomExpander = bomExpander;
@@ -81,7 +84,8 @@ public sealed class ConsumableTab
         _recipeRepo = recipeRepo;
         _materialListWidget = materialListWidget;
         _config = config;
-        _luminaCache = luminaCache;
+        _luminaCache = luminaCache;        _itemIconService = itemIconService;
+
         _log = log;
     }
 
@@ -236,6 +240,8 @@ public sealed class ConsumableTab
         ImGui.SameLine();
 
         var nameColor = isSelected ? new Vector4(0.2f, 0.9f, 0.2f, 1f) : new Vector4(1f, 1f, 1f, 1f);
+                var itemIcon = _itemIconService.GetItemIcon(item.RowId);
+        if (itemIcon.Handle != 0) { ImGui.Image(itemIcon, new Vector2(20, 20)); ImGui.SameLine(); }
         ImGui.TextColored(nameColor, item.Name.ToString());
 
         // 显示 ILvl

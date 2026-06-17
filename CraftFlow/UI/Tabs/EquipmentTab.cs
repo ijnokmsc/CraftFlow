@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using CraftFlow.Config;
+using CraftFlow.Services;
 using CraftFlow.Data.GameData;
 using CraftFlow.Data.Models;
 using CraftFlow.Services;
@@ -31,6 +32,7 @@ public sealed class EquipmentTab
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
     private readonly JobIconService _jobIconService;
+    private readonly ItemIconService _itemIconService;
 
     // 选中状态
     private RoleGroup? _selectedRoleGroup;
@@ -67,7 +69,8 @@ public sealed class EquipmentTab
         MaterialListWidget materialListWidget,
         PluginConfig config,
         IPluginLog log,
-        JobIconService jobIconService)
+        JobIconService jobIconService,
+        ItemIconService itemIconService)
     {
         _equipRepo = equipRepo;
         _setService = setService;
@@ -76,11 +79,12 @@ public sealed class EquipmentTab
         _craftOrderCalculator = craftOrderCalculator;
         _recipeRepo = recipeRepo;
         _materialListWidget = materialListWidget;
-        _slotGroupWidget = new EquipmentSlotGroupWidget(log);
-        _quickAddWidget = new QuickAddButtonsWidget(setService, log);
         _config = config;
         _log = log;
         _jobIconService = jobIconService;
+        _itemIconService = itemIconService;
+        _slotGroupWidget = new EquipmentSlotGroupWidget(log, _itemIconService);
+        _quickAddWidget = new QuickAddButtonsWidget(setService, log);
 
         // 默认版本：0 表示全部，初始化时将延迟设置到最新版本
         _versionFilter = 0;

@@ -39,6 +39,7 @@ public sealed class MainWindow : Window
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly StatusBarWidget _statusBar;
     private readonly JobIconService _jobIconService;
+    private readonly ItemIconService _itemIconService;
 
     private TabType _currentTab = TabType.Equipment;
 
@@ -76,6 +77,7 @@ public sealed class MainWindow : Window
         CraftProgressManager progressManager,
         CraftProgressWindow craftProgressWindow,
         JobIconService jobIconService,
+        ItemIconService itemIconService,
         LuminaCache luminaCache,
         IPluginLog log)
         : base($"CraftFlow {GetVersionString()}###CraftFlowMainWindow")
@@ -97,8 +99,9 @@ public sealed class MainWindow : Window
         _log = log;
         _luminaCache = luminaCache;
         _jobIconService = jobIconService;
+        _itemIconService = itemIconService;
 
-        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log, this);
+        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log, _itemIconService, this);
         // 设置制作开始回调：显示进度窗口，隐藏主窗口
         materialListWidget.OnStartCrafting = (steps) =>
         {
@@ -108,11 +111,11 @@ public sealed class MainWindow : Window
 
         _equipmentTab = new EquipmentTab(
             equipRepo, equipSetService, bomExpander, materialAggregator, craftOrderCalculator,
-            recipeRepo, materialListWidget, config, log, _jobIconService);
+            recipeRepo, materialListWidget, config, log, _jobIconService, _itemIconService);
 
         _consumableTab = new ConsumableTab(
             bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
-            materialListWidget, config, luminaCache, log);
+            materialListWidget, config, luminaCache, _itemIconService, log);
 
         _favoritesTab = new FavoritesTab(presetService, () => _equipmentTab.GetSelectedTargets(), log);
         _favoritesTab.SetTargetLoadedCallback((targets, name) =>

@@ -1,0 +1,19 @@
+﻿### Bug 修复
+
+- 水晶过滤误杀非晶簇物品 (MaterialAggregator)
+- 仅缺失材料共享中间产物库存跨分支重复扣减 (核心)
+- BOM树视图叶节点全局聚合值错误
+- 成品库存误抵扣下级材料需求 (Depth==0)
+- Drop来源缺失 / 收藏品BOM递归展开
+
+### 新增
+
+- 测试项目框架 (CraftFlow.Tests/)
+
+### 变更
+
+- 主界面隐藏通知日志面板
+
+### 安装
+
+下载 CraftFlow-v0.2.2.zip 解压到 `%APPDATA%\XIVLauncherCN\devPlugins\CraftFlow\`

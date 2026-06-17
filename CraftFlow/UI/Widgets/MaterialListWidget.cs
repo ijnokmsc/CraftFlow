@@ -7,6 +7,7 @@ using Dalamud.Plugin.Services;
 using CraftFlow.Config;
 using CraftFlow.Data.Models;
 using CraftFlow.Helpers;
+using CraftFlow.Services;
 using CraftFlow.IPC;
 using CraftFlow.Services;
 
@@ -23,7 +24,8 @@ public sealed class MaterialListWidget
     private readonly CraftProgressManager _progressManager;
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
-    private readonly MainWindow? _mainWindow;
+        private readonly ItemIconService _itemIconService;
+private readonly MainWindow? _mainWindow;
 
     /// <summary>制作开始回调，由 MainWindow 设置。用于将制作流程委托给 CraftProgressWindow。</summary>
     public Action<List<CraftStep>>? OnStartCrafting { get; set; }
@@ -54,6 +56,7 @@ public sealed class MaterialListWidget
         CraftProgressManager progressManager,
         PluginConfig config,
         IPluginLog log,
+        ItemIconService itemIconService,
         MainWindow? mainWindow = null)
     {
         _gbrIpc = gbrIpc;
@@ -63,6 +66,7 @@ public sealed class MaterialListWidget
         _config = config;
         _log = log;
         _mainWindow = mainWindow;
+        _itemIconService = itemIconService;
     }
 
     // ================================================================
@@ -201,10 +205,12 @@ public sealed class MaterialListWidget
                     ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
                         ImGui.ColorConvertFloat4ToU32(new Vector4(0.2f, 0.4f, 0.6f, 0.3f)));
 
-                // 物品名
+                                // 物品名
                 ImGui.TableNextColumn();
                 var nameColor = fullyCovered ? ColorGray : new Vector4(1f, 1f, 1f, 1f);
                 ImGui.PushStyleColor(ImGuiCol.Text, nameColor);
+                var matIcon = _itemIconService.GetItemIcon(mat.ItemId);
+                if (matIcon.Handle != 0) { ImGui.Image(matIcon, new Vector2(20, 20)); ImGui.SameLine(); }
                 ImGui.Selectable(mat.ItemName, isSelected,
                     ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowDoubleClick,
                     new Vector2(0, 0));
@@ -627,7 +633,12 @@ public sealed class MaterialListWidget
         }
 
         // 默认标签
-        string defaultLabel = node.ItemId == 0
+        // 物品图标
+        if (node.ItemId != 0) {
+            var nodeIcon = _itemIconService.GetItemIcon(node.ItemId);
+            if (nodeIcon.Handle != 0) { ImGui.Image(nodeIcon, new Vector2(20, 20)); ImGui.SameLine(); }
+        }
+                string defaultLabel = node.ItemId == 0
             ? node.ItemName
             : $"{node.ItemName} ×{rawQty}";
         if (node.IsIncomplete) defaultLabel += " [不完整]";
