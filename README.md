@@ -45,14 +45,14 @@ C:\Users\你的用户名\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\
 2. 左侧菜单 → **插件仓库** → **添加仓库**
 3. 粘贴以下地址：
    ```
-   https://raw.githubusercontent.com/ijnokmsc/CraftFlow/main/repo.json
+   https://raw.githubusercontent.com/ijnokmsc/DalamudPlugins/main/pluginmaster.json
    ```
 4. 确定 → 重新整理插件列表
 5. 搜索 **CraftFlow** → 安装
 
 ### 方式二：手动安装
 
-1. 从 [Releases](https://github.com/ijnokmsc/CraftFlow/releases/latest) 下载 `latest.zip`
+1. 从 [Releases](https://github.com/ijnokmsc/DalamudPlugins/releases) 下载对应版本的 `latest.zip`
 2. 解压到 `%APPDATA%\XIVLauncherCN\devPlugins\CraftFlow\`
 3. 游戏内 `/xlplugins` → 开发者插件 → 刷新并启用
 
