@@ -7,7 +7,7 @@
          实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\ -->
     <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
     <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
-    <Version>0.2.3.0</Version>
+    <Version>0.2.4.0</Version>
     <PackageProjectUrl>https://github.com/CraftFlow/CraftFlow</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -18,6 +18,9 @@
   <!-- 将 HQHelper 项目 (https://hqhelper.nbb.fan/) 的 game-gear SVG 图标作为嵌入资源 -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\Icons\*.svg" />
+    <!-- 职业/分组图标 PNG 嵌入 DLL，首次运行时提取到插件目录 -->
+    <EmbeddedResource Include="Resources\job-icons\*.png" LogicalName="CraftFlow.Resources.job-icons.%(FileName)%(Extension)" />
+    <EmbeddedResource Include="Resources\role-icons\*.png" LogicalName="CraftFlow.Resources.role-icons.%(FileName)%(Extension)" />
   </ItemGroup>
 
   <!-- 编译后自动部署到 XIVLauncherCN devPlugins 目录 -->

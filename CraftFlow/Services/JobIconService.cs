@@ -87,6 +87,9 @@ public sealed class JobIconService : IDisposable
         _roleIconsDir = Path.Combine(pluginDirectory, "role-icons");
         _log = log;
 
+        // 确保图标文件存在于磁盘（从嵌入资源提取，支持 Dalamud 仅提取 DLL 的场景）
+        ExtractEmbeddedIcons();
+
         _log.Information($"[JobIconService] 初始化 pluginDir={pluginDirectory}");
         _log.Information($"[JobIconService] jobIconsDir={_jobIconsDir} exists={Directory.Exists(_jobIconsDir)}");
         _log.Information($"[JobIconService] roleIconsDir={_roleIconsDir} exists={Directory.Exists(_roleIconsDir)}");
@@ -94,6 +97,53 @@ public sealed class JobIconService : IDisposable
             _log.Information($"[JobIconService] job-icons 文件数={Directory.GetFiles(_jobIconsDir, "*.png").Length}");
         if (Directory.Exists(_roleIconsDir))
             _log.Information($"[JobIconService] role-icons 文件数={Directory.GetFiles(_roleIconsDir, "*.png").Length}");
+    }
+
+    /// <summary>
+    /// 从嵌入资源中提取图标 PNG 到磁盘目录（如果目标不存在）。
+    /// 支持 Dalamud 只提取 DLL 的场景，确保图标文件在插件目录中可用。
+    /// </summary>
+            private void ExtractEmbeddedIcons()
+    {
+        var assembly = typeof(JobIconService).Assembly;
+        foreach (var fullName in assembly.GetManifestResourceNames())
+        {
+            // Map embedded resource name to base directory
+            string? baseDir = null;
+            string relative;
+            if (fullName.StartsWith("CraftFlow.Resources.job-icons."))
+            {
+                baseDir = _jobIconsDir;
+                relative = fullName["CraftFlow.Resources.job-icons.".Length..];
+            }
+            else if (fullName.StartsWith("CraftFlow.Resources.role-icons."))
+            {
+                baseDir = _roleIconsDir;
+                relative = fullName["CraftFlow.Resources.role-icons.".Length..];
+            }
+            else continue;
+
+            // relative = "miner.png" or "clear_doh.png"
+            var diskPath = Path.Combine(baseDir!, relative);
+            if (diskPath is null) continue;
+            var dir = Path.GetDirectoryName(diskPath);
+            if (dir is null) continue;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            if (File.Exists(diskPath)) continue;
+
+            try
+            {
+                using var stream = assembly.GetManifestResourceStream(fullName);
+                if (stream is null) continue;
+                using var fs = new FileStream(diskPath, FileMode.Create, FileAccess.Write);
+                stream.CopyTo(fs);
+                _log.Debug($"[JobIconService] 提取图标: {relative}");
+            }
+            catch (Exception ex)
+            {
+                _log.Warning($"[JobIconService] 提取图标失败 {relative}: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>
