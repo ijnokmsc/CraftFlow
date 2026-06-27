@@ -21,7 +21,7 @@ public static class GbrListHelper
     /// 用户在 GBR AutoGather 列表中右键 → 粘贴 即可导入。
     /// </summary>
     /// <param name="materials">材料清单。</param>
-    /// <param name="deficitMap">可选：以 ItemId 为键的差额字典。传入后只输出差额 > 0 的采集材料，数量使用差额值。</param>
+    /// <param name="deficitMap">可选：以 ItemId 为键的差额字典。传入后只筛选差额 > 0 的采集材料，但数量使用 TotalRequired（不扣背包），因为 GBR 自身也会检查背包库存，双重扣除会导致采集不足。</param>
     public static string ToGbrBase64(List<MaterialEntry> materials, Dictionary<uint, int>? deficitMap = null)
     {
         var gatherable = materials
@@ -31,13 +31,14 @@ public static class GbrListHelper
         if (gatherable.Count == 0)
             return "";
 
-        // 如果提供了差额表，过滤为仅差额 > 0 的材料，并使用差额数量
+        // 如果提供了差额表，筛选仅差额 > 0 的材料，但数量使用 TotalRequired（不扣背包）
+        // 因为 GBR 自身也会检查背包库存，双重扣除会导致采集不足
         List<(uint ItemId, string ItemName, int Quantity)> items;
         if (deficitMap != null)
         {
             items = gatherable
                 .Where(m => deficitMap.TryGetValue(m.ItemId, out int deficit) && deficit > 0)
-                .Select(m => (m.ItemId, m.ItemName, deficitMap[m.ItemId]))
+                .Select(m => (m.ItemId, m.ItemName, m.TotalRequired))
                 .ToList();
         }
         else

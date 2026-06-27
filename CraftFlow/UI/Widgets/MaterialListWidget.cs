@@ -455,10 +455,9 @@ private readonly MainWindow? _mainWindow;
         ImGui.SetClipboardText(b64);
 
         var count = deficitMap?.Count ?? materials.Count(m => m.Source == MaterialSource.Gatherable);
-        var suffix = _config.OnlyMissingMaterials ? $"（仅缺失 {count} 种）" : "";
-        _gbrPushNotification = $"GBR 采集清单{suffix}已复制到剪贴板\n在 GBR AutoGather 列表中右键 → 粘贴导入";
+        _gbrPushNotification = $"GBR 采集清单已复制到剪贴板\n（{count} 种，总需求量）";
         _log.Information($"GBR 推送完成 (base64, onlyMissing={_config.OnlyMissingMaterials}, hqOnly={_config.HqOnly})");
-        _mainWindow?.AddLog($"GBR 采集清单{suffix}已复制到剪贴板", LogLevel.Success);
+        _mainWindow?.AddLog($"GBR 采集清单（{count} 种）已复制到剪贴板", LogLevel.Success);
     }
 
     public void DrawGbrNotification()
