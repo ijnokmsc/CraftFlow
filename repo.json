@@ -3,7 +3,7 @@
     "Author": "zhaoy",
     "Name": "CraftFlow",
     "InternalName": "CraftFlow",
-    "AssemblyVersion": "0.2.4.0",
+    "AssemblyVersion": "0.2.5.0",
     "Description": "FF14鐢熶骇杈呭姪鎻掍欢锛欱OM閫掑綊灞曞紑/閲囬泦鎺ㄩ€佽嚦GatherBuddyReborn/涓€閿瓵rtisan鍒朵綔/宸ョエ璁＄畻銆傛敮鎸佽澶囥€侀鐗┿€佽嵂鍝併€佹敹钘忓搧銆備娇鐢?/craftflow 鎵撳紑銆?,
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
@@ -12,10 +12,10 @@
     "Punchline": "FF14鐢熶骇杈呭姪 - BOM灞曞紑/閲囬泦鎺ㄩ€?涓€閿埗浣?,
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": "1781943733",
-    "DownloadLinkInstall": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.4/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.4/latest.zip",
-    "DownloadLinkTesting": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.4/latest.zip",
+    "LastUpdate": "1782573755",
+    "DownloadLinkInstall": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.5/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.5/latest.zip",
+    "DownloadLinkTesting": "https://github.com/ijnokmsc/CraftFlow/releases/download/v0.2.5/latest.zip",
     "IconUrl": ""
   },
   {
