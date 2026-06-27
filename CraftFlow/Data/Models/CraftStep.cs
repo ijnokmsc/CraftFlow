@@ -27,6 +27,12 @@ public sealed class CraftStep
     public int Quantity { get; set; }
 
     /// <summary>
+    /// 单次制作的产出数量（AmountResult）。1次制作=AmountResult个物品。
+    /// 用于判断背包已有量是否可跳过本次制作。
+    /// </summary>
+    public int AmountResult { get; set; }
+
+    /// <summary>
     /// 拓扑排序顺序号（0 = 最先制作）。
     /// </summary>
     public int Order { get; set; }

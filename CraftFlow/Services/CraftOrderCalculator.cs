@@ -45,6 +45,7 @@ public sealed class CraftOrderCalculator
                     ItemId = node.ItemId,
                     ItemName = node.ItemName,
                     Quantity = node.Quantity,
+                    AmountResult = node.AmountResult,
                     Order = i,
                     Status = StepStatus.Pending
                 });
@@ -139,6 +140,7 @@ public sealed class CraftOrderCalculator
                     ItemId = list[0].ItemId,
                     ItemName = list[0].ItemName,
                     Quantity = list.Sum(s => s.Quantity),
+                    AmountResult = list[0].AmountResult,
                     Order = list.Min(s => s.Order),
                     Status = StepStatus.Pending
                 });

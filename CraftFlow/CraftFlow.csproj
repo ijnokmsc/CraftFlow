@@ -7,7 +7,7 @@
          实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\ -->
     <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
     <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
-    <Version>0.2.5.0</Version>
+    <Version>0.2.6.0</Version>
     <PackageProjectUrl>https://github.com/CraftFlow/CraftFlow</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

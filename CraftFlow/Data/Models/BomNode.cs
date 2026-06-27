@@ -42,6 +42,12 @@ public sealed class BomNode
     public bool IsLeaf => Children.Count == 0;
 
     /// <summary>
+    /// 配方产出数量（AmountResult）。用于判断背包已有是否可跳过制作。
+    /// 0 或无配方时为默认值。
+    /// </summary>
+    public int AmountResult { get; set; }
+
+    /// <summary>
     /// 是否因循环引用或深度超限而标记为不完整。
     /// </summary>
     public bool IsIncomplete { get; set; }

@@ -512,8 +512,33 @@ private readonly MainWindow? _mainWindow;
 
         if (materials is not null && materials.Count > 0)
         {
-            var inv = InventoryHelper.CheckInventory(materials);
-            var missing = inv.Where(i => i.Deficit > 0).ToList();
+            // 检查材料是否充足：考虑半成品（effective needs）扣减
+            bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
+            List<(MaterialEntry Entry, int Deficit)> missing;
+
+            if (_config.OnlyMissingMaterials && _bomRoot is not null)
+            {
+                // 使用有效需求（含半成品扣减），再扣除原材料背包库存
+                var effectiveNeeds = InventoryHelper.CalculateEffectiveNeeds(_bomRoot, useHq);
+                missing = materials
+                    .Where(m => effectiveNeeds.TryGetValue(m.ItemId, out int need) && need > 0)
+                    .Select(m =>
+                    {
+                        int owned = InventoryHelper.GetItemCount(m.ItemId, false);
+                        int deficit = Math.Max(0, effectiveNeeds[m.ItemId] - owned);
+                        return (m, deficit);
+                    })
+                    .Where(x => x.deficit > 0)
+                    .ToList();
+            }
+            else
+            {
+                var inv = InventoryHelper.CheckInventory(materials, useHq);
+                missing = inv.Where(i => i.Deficit > 0)
+                    .Select(i => (i.Entry, i.Deficit))
+                    .ToList();
+            }
+
             if (missing.Count > 0)
             {
                 var names = string.Join(", ", missing.Take(3).Select(m => $"{m.Entry.ItemName} 缺{m.Deficit}"));
@@ -523,10 +548,34 @@ private readonly MainWindow? _mainWindow;
             }
         }
 
-        _progressManager.Start(steps);
+        // 过滤：已有半成品跳过制作或减少制作次数
+        var filteredSteps = steps
+            .Select(s =>
+            {
+                int owned = InventoryHelper.GetItemCount(s.ItemId, false);
+                if (owned <= 0) return (Step: s, Skip: false);
+
+                int yield = s.AmountResult > 0 ? s.AmountResult : 1;
+                int totalProduced = s.Quantity * yield;
+                if (owned >= totalProduced)
+                {
+                    _log.Information($"跳过制作 {s.ItemName}（已有 {owned}，需要 {totalProduced}）");
+                    return (Step: s, Skip: true);
+                }
+
+                int stillNeeded = totalProduced - owned;
+                s.Quantity = Math.Max(1, (int)Math.Ceiling((double)stillNeeded / yield));
+                _log.Information($"调整制作 {s.ItemName}：需要 {stillNeeded} 件，制作 {s.Quantity} 次 (yield={yield})");
+                return (Step: s, Skip: false);
+            })
+            .Where(x => !x.Skip)
+            .Select(x => x.Step)
+            .ToList();
+
+        _progressManager.Start(filteredSteps);
         _artisanIpc.SetEnduranceStatus(true);
 
-        OnStartCrafting?.Invoke(steps);
+        OnStartCrafting?.Invoke(filteredSteps);
     }
 
     // ================================================================

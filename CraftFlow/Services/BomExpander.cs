@@ -96,6 +96,7 @@ public sealed class BomExpander
             // 配方产量（AmountResult）：多数配方=1，部分中间产品=3/5等
             // ingredient 数量是按"AmountResult 个产出"给出的，需按需折算
             int yield = recipe.Value.AmountResult > 0 ? recipe.Value.AmountResult : 1;
+            node.AmountResult = yield;
 
             // 遍历 8 个材料槽位
             for (int i = 0; i < 8; i++)
