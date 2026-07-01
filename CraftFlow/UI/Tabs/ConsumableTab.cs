@@ -9,7 +9,6 @@ using CraftFlow.Config;
 using CraftFlow.Services;
 using CraftFlow.Data.GameData;
 using CraftFlow.Data.Models;
-using CraftFlow.Services;
 using CraftFlow.UI.Widgets;
 using Lumina.Excel.Sheets;
 

@@ -43,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IpcAvailabilityChecker _ipcChecker;
     private readonly PluginConfig _config;
     private readonly CraftProgressManager _progressManager;
+    private readonly CraftOrchestrator _craftOrchestrator;
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly JobIconService _jobIconService;
     private readonly ItemIconService _itemIconService;
@@ -66,7 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         _luminaCache = new LuminaCache(DataManager, Log);
         _luminaCache.Init();
         _recipeRepo = new RecipeRepository(_luminaCache, Log);
-        _equipRepo = new EquipmentRepository(_luminaCache, Log, TextureProvider);
+        _equipRepo = new EquipmentRepository(_luminaCache, Log);
 
         // 业务逻辑层
         _bomExpander = new BomExpander(_recipeRepo, Log);
@@ -86,6 +87,9 @@ public sealed class Plugin : IDalamudPlugin
 
         // 制作进度管理器（从 MainWindow 中提升）
         _progressManager = new CraftProgressManager(_config, Log);
+
+        // 制作编排服务（从 MaterialListWidget.CraftWithArtisan 提取，P4 重构）
+        _craftOrchestrator = new CraftOrchestrator(_config, Log, _progressManager, _artisanIpc);
 
         // 职业图标服务（外部 PNG 文件）
         // API 15: PluginInterface.AssemblyLocation → 插件 DLL 路径 → 其所在目录即为插件目录
@@ -113,6 +117,7 @@ public sealed class Plugin : IDalamudPlugin
             _artisanIpc,
             _ipcChecker,
             _progressManager,
+            _craftOrchestrator,
             _craftProgressWindow,
             _jobIconService,
             _itemIconService,

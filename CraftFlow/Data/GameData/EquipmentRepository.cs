@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Dalamud.Interface.Textures;
-using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 using CraftFlow.Data.Models;
@@ -14,12 +12,12 @@ namespace CraftFlow.Data.GameData;
 /// 通过 ClassJobCategory 结构体的布尔属性（CanJobEquip）匹配职业，
 /// 通过 EquipSlotCategory 判断装备槽位。
 /// 注意：已废弃 ClassJobCategory.Name 字符串匹配，国服 Name 返回中文名无法与英文 affix 比较。
+/// 职业图标加载已迁移至 JobIconService（外部 PNG 文件方式）。
 /// </summary>
 public sealed class EquipmentRepository
 {
     private readonly LuminaCache _cache;
     private readonly IPluginLog _log;
-    private readonly ITextureProvider? _textureProvider;
 
     /// <summary>
     /// ILvl → PatchVersion 映射表（FFXIV DT 7.x 版本）。
@@ -37,22 +35,14 @@ public sealed class EquipmentRepository
     ];
 
     /// <summary>
-    /// 职业图标纹理缓存，ClassJobId → IDalamudTextureWrap。
-    /// 保存引用以防止 GC 回收。
-    /// </summary>
-    private readonly Dictionary<uint, IDalamudTextureWrap> _classJobIconCache = [];
-
-    /// <summary>
     /// 初始化 EquipmentRepository 实例。
     /// </summary>
     /// <param name="cache">Lumina 数据缓存。</param>
     /// <param name="log">插件日志。</param>
-    /// <param name="textureProvider">纹理提供器（可选，用于加载职业图标）。</param>
-    public EquipmentRepository(LuminaCache cache, IPluginLog log, ITextureProvider? textureProvider = null)
+    public EquipmentRepository(LuminaCache cache, IPluginLog log)
     {
         _cache = cache;
         _log = log;
-        _textureProvider = textureProvider;
     }
 
     /// <summary>
@@ -454,264 +444,5 @@ public sealed class EquipmentRepository
             or EquipmentSlotType.Neck
             or EquipmentSlotType.Wrists
             or EquipmentSlotType.Fingers;
-    }
-
-    /// <summary>
-    /// 获取职业图标的游戏图标 ID。
-    /// 通过 Lumina ClassJob 数据获取图标 ID，使用缓存避免重复查询。
-    /// 返回的图标 ID 可用于 TextureProvider.GetFromGameIcon() 加载纹理。
-    /// </summary>
-    /// <param name="classJobId">职业 ID（ClassJob RowId）。</param>
-    /// <returns>游戏图标 ID，0 表示无法获取。</returns>
-    public uint GetClassJobIcon(uint classJobId)
-    {
-        if (classJobId == 0) return 62147;
-
-        if (!_cache.ClassJobSheet.TryGetValue(classJobId, out var classJob))
-        {
-            _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 不在 ClassJobSheet 中，使用回退");
-            return GetClassJobIconFallback(classJobId);
-        }
-
-        // 主动触发 RowRef 解析：访问一次 ItemSheet 对应行
-        // Lumina 的 RowRef 是惰性加载，需要目标 Sheet 已被访问过才能解析 RowId
-        // 这里先尝试直接读，如果 RowId=0 则回退
-        var soulCrystalRowId = classJob.ItemSoulCrystal.RowId;
-        var weaponRowId = classJob.ItemStartingWeaponMainHand.RowId;
-
-        _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal.RowId={soulCrystalRowId} ItemStartingWeaponMainHand.RowId={weaponRowId}");
-
-        // 优先尝试通过反射读取 ClassJob 的 Icon 字段（Lumina 自动生成的 struct 可能未暴露此字段）
-        // FFXIV ClassJob Excel 表有 Icon 列，存储职业在 UI 中显示的图标 ID
-        try
-        {
-            var iconProp = typeof(ClassJob).GetProperty("Icon");
-            if (iconProp is not null)
-            {
-                var iconVal = iconProp.GetValue(classJob);
-                if (iconVal is uint u && u > 0)
-                {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon={u}");
-                    return u;
-                }
-                if (iconVal is int i && i > 0)
-                {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon(int)={i}");
-                    return (uint)i;
-                }
-                if (iconVal is ushort us && us > 0)
-                {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} 反射获取 Icon(ushort)={us}");
-                    return us;
-                }
-            }
-            else
-            {
-                // 打印 ClassJob 的所有属性名，帮助定位 Icon 字段的正确名称
-                var allProps = typeof(ClassJob).GetProperties().Select(p => p.Name).ToArray();
-                _log.Debug($"[GetClassJobIcon] ClassJob 无 Icon 属性，所有属性: [{string.Join(", ", allProps)}]");
-                // 同时检查 Field（Lumina 有时用字段而非属性）
-                var allFields = typeof(ClassJob).GetFields().Select(f => $"{f.Name}:{f.FieldType.Name}").ToArray();
-                _log.Debug($"[GetClassJobIcon] ClassJob 所有字段: [{string.Join(", ", allFields)}]");
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"[GetClassJobIcon] 反射读取 Icon 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
-        }
-
-        // 路径1：ClassJob.ItemStartingWeaponMainHand → Item.Icon（职业起始武器/工具的图标 = 职业图标）
-        // 注：ItemSoulCrystal 的图标是水晶，不是职业图标，因此放到路径2作为回退
-        if (weaponRowId > 0)
-        {
-            try
-            {
-                if (_cache.ItemSheet.TryGetValue(weaponRowId, out var weaponItem))
-                {
-                    var iconId = (uint)weaponItem.Icon;
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} weaponItem.Icon={iconId} (ushort→uint)");
-                    if (iconId > 0)
-                    {
-                        return iconId;
-                    }
-                }
-                else
-                {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemStartingWeaponMainHand RowId={weaponRowId} 不在 ItemSheet 中");
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Debug($"[GetClassJobIcon] ItemStartingWeaponMainHand 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
-            }
-        }
-
-        // 路径2：ClassJob.ItemSoulCrystal → Item.Icon（战斗职业的灵魂水晶，仅作为回退）
-        if (soulCrystalRowId > 0)
-        {
-            try
-            {
-                if (_cache.ItemSheet.TryGetValue(soulCrystalRowId, out var soulCrystalItem))
-                {
-                    var iconId = (uint)soulCrystalItem.Icon;
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} soulCrystalItem.Icon={iconId} (ushort→uint, 回退路径)");
-                    if (iconId > 0)
-                    {
-                        return iconId;
-                    }
-                }
-                else
-                {
-                    _log.Debug($"[GetClassJobIcon] ClassJobId={classJobId} ItemSoulCrystal RowId={soulCrystalRowId} 不在 ItemSheet 中");
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Debug($"[GetClassJobIcon] ItemSoulCrystal 异常 ClassJobId={classJobId}: {ex.GetType().Name}: {ex.Message}");
-            }
-        }
-
-        // 路径3：回退映射表（已知正确的图标 ID）
-        _log.Debug($"[GetClassJobIcon] RowRef 解析失败（RowId=0），使用回退映射表 ClassJobId={classJobId}");
-        return GetClassJobIconFallback(classJobId);
-    }
-
-    /// <summary>
-    /// 获取职业图标的 IDalamudTextureWrap，用于 ImGui 渲染。
-    /// 通过 TextureProvider 加载游戏内图标，使用缓存避免重复加载。
-    /// 注意：返回的 wrap 引用需要保持引用以防止 GC 回收。
-    /// </summary>
-    /// <param name="classJobId">职业 ID（ClassJob RowId）。</param>
-    /// <returns>图标纹理，若无法加载返回 null。</returns>
-    public IDalamudTextureWrap? GetClassJobIconTexture(uint classJobId)
-    {
-        // 检查缓存
-        if (_classJobIconCache.TryGetValue(classJobId, out var cached))
-        {
-            return cached;
-        }
-
-        // 如果 TextureProvider 不可用，无法加载图标
-        if (_textureProvider is null)
-        {
-            return null;
-        }
-
-        var iconId = GetClassJobIcon(classJobId);
-        if (iconId == 0)
-        {
-            return null;
-        }
-
-        try
-        {
-            var sharedTexture = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId, false, true));
-            var iconTexture = sharedTexture.GetWrapOrDefault();
-
-            if (iconTexture is not null)
-            {
-                _classJobIconCache[classJobId] = iconTexture;
-                return iconTexture;
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"加载职业图标纹理失败 ClassJobId={classJobId} IconId={iconId}: {ex.Message}");
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// 职业图标 ID 回退映射表（已知正确 ID，来源：FFXIV 游戏数据 + WrathCombo）。
-    /// 当 Lumina RowRef 无法解析时（ItemSoulCrystal.RowId=0），
-    /// 直接使用此映射获取图标 ID。
-    /// 
-    /// 图标 ID 来源说明：
-    /// - 战斗职业：ClassJob.Icon 字段值（由 Lumina/ExcelSheet 提供，通常是 062xxx 范围）
-    /// - 生产职业：同样使用 ClassJob.Icon 字段
-    /// - 采集职业：WrathCombo 使用 82096（角色分组图标）
-    /// 
-    /// 注意：此表中的值是十进制整数，对应游戏图标文件编号。
-    /// </summary>
-    private static uint GetClassJobIconFallback(uint classJobId)
-    {
-        // 此映射表的值来自 FFXIV 游戏客户端内的 ClassJob.Icon 字段。
-        // 每个职业在游戏数据里都有一个 Icon 字段，存储该职业在 UI 中显示的图标 ID。
-        //
-        // 如何验证：在游戏内打开"角色"窗口 → 选择"职业"标签，
-        // 每个职业图标旁边的数字就是 Icon ID（可通过 TexTools 或 Garland Tools 确认）。
-        //
-        // 已知正确的值（通过 WrathCombo 源码 + xivapi.com 交叉验证）：
-        //   ADV / 新人：62147
-        //   战斗职业（Job 图标，非 Soul Crystal）：62401~62804 范围
-        //   生产职业（DoH）：62001~62008 范围
-        //   采集职业（DoL）：63001~63003 范围（但 WrathCombo 对采集统一用 82096）
-        //
-        // 以下映射表通过以下方式确认：
-        //   1. WrathCombo Icons.cs：MIN/BTN/FSH → 82096
-        //   2. xivapi.com ClassJob 数据：Icon 字段
-        //   3. Garland Tools / TexTools：交叉验证
-        //
-        // ⚠️ 如果图标仍不正确，说明此表中的某个 ID 有误，
-        //    请在游戏中用 TexTools 或 /xivbar 等工具确认正确的 Icon ID。
-
-        return classJobId switch
-        {
-            // 冒险者 / 基础职业（无 Job 职业）
-            0 => 62147,   // ADV - 冒险者图标
-
-            // ─── 坦克 Tank ───────────────────────────────────
-            19 => 62401,   // 骑士 PLD
-            21 => 62402,   // 战士 WAR
-            32 => 62403,   // 暗黑骑士 DRK
-            37 => 62404,   // 绝枪战士 GNB
-
-            // ─── 治疗 Healer ────────────────────────────────
-            24 => 62501,   // 白魔法师 WHM
-            28 => 62502,   // 学者 SCH
-            33 => 62503,   // 占星术士 AST
-            40 => 62504,   // 贤者 SGE
-
-            // ─── 近战 DPS Melee DPS ───────────────────────
-            22 => 62601,   // 龙骑士 DRG
-            20 => 62602,   // 武僧 MNK
-            34 => 62603,   // 武士 SAM
-            39 => 62604,   // 钐镰客 RPR
-
-            // ─── 远敏 DPS Ranged DPS ──────────────────────
-            23 => 62701,   // 吟游诗人 BRD
-            31 => 62702,   // 机工士 MCH
-            38 => 62703,   // 舞者 DNC
-
-            // ─── 法系 DPS Magic DPS ────────────────────────
-            25 => 62801,   // 黑魔法师 BLM
-            27 => 62802,   // 召唤师 SMN
-            35 => 62803,   // 赤魔法师 RDM
-            42 => 62804,   // 绘灵法师 BLU
-
-            // ─── 特殊近战（不在标准 Melee 分组）────────────
-            30 => 62901,   // 忍者 NIN
-            41 => 62902,   // 蝰蛇剑士 VPR
-
-            // ─── 生产职业 Crafter (DoH) ──────────────────
-            // 注：生产职业的图标 ID 在 62001~62008 范围
-            8 => 62001,    // 刻木匠 CRP
-            9 => 62002,    // 锻铁匠 BSM
-            10 => 62003,   // 铸甲匠 ARM
-            11 => 62004,   // 雕金匠 GSM
-            12 => 62005,   // 制革匠 LTW
-            13 => 62006,   // 裁衣匠 WVR
-            14 => 62007,   // 炼金术士 ALC
-            15 => 62008,   // 烹调师 CUL
-
-            // ─── 采集职业 Gatherer (DoL) ──────────────────
-            // 注：WrathCombo 对 MIN/BTN/FSH 统一使用 82096（角色选择界面的 DoL 图标）
-            16 => 82096,   // 采矿工 MIN
-            17 => 82096,   // 园艺工 BTN
-            18 => 82096,   // 捕鱼人 FSH
-
-            _ => 0
-        };
     }
 }

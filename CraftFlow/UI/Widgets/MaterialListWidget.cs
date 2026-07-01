@@ -9,26 +9,28 @@ using CraftFlow.Data.Models;
 using CraftFlow.Helpers;
 using CraftFlow.Services;
 using CraftFlow.IPC;
-using CraftFlow.Services;
 
 namespace CraftFlow.UI.Widgets;
 
 /// <summary>
 /// 可复用材料清单组件，支持背包库存检测、固定按钮栏。
+/// 通过 OnLog 事件向订阅者发布日志，不反向依赖 MainWindow（解耦循环依赖）。
 /// </summary>
 public sealed class MaterialListWidget
 {
     private readonly GbrIpcClient _gbrIpc;
     private readonly ArtisanIpcClient _artisanIpc;
     private readonly IpcAvailabilityChecker _ipcChecker;
-    private readonly CraftProgressManager _progressManager;
+    private readonly CraftOrchestrator _craftOrchestrator;
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
-        private readonly ItemIconService _itemIconService;
-private readonly MainWindow? _mainWindow;
+    private readonly ItemIconService _itemIconService;
 
     /// <summary>制作开始回调，由 MainWindow 设置。用于将制作流程委托给 CraftProgressWindow。</summary>
     public Action<List<CraftStep>>? OnStartCrafting { get; set; }
+
+    /// <summary>日志回调，由 MainWindow 订阅。替代原先的 _mainWindow?.AddLog 反向调用。</summary>
+    public event Action<string, LogLevel>? OnLog;
 
     /// <summary>当前 BOM 树根节点，由外部 Tab 设置，用于缺失材料计算。</summary>
     private BomNode? _bomRoot;
@@ -53,21 +55,23 @@ private readonly MainWindow? _mainWindow;
         GbrIpcClient gbrIpc,
         ArtisanIpcClient artisanIpc,
         IpcAvailabilityChecker ipcChecker,
-        CraftProgressManager progressManager,
+        CraftOrchestrator craftOrchestrator,
         PluginConfig config,
         IPluginLog log,
-        ItemIconService itemIconService,
-        MainWindow? mainWindow = null)
+        ItemIconService itemIconService)
     {
         _gbrIpc = gbrIpc;
         _artisanIpc = artisanIpc;
         _ipcChecker = ipcChecker;
-        _progressManager = progressManager;
+        _craftOrchestrator = craftOrchestrator;
         _config = config;
         _log = log;
-        _mainWindow = mainWindow;
         _itemIconService = itemIconService;
     }
+
+    /// <summary>发布日志通知（供内部方法调用）。</summary>
+    private void PublishLog(string message, LogLevel level = LogLevel.Info)
+        => OnLog?.Invoke(message, level);
 
     // ================================================================
     //  主入口：材料面板（可滚动列表 + 固定按钮栏）
@@ -425,7 +429,7 @@ private readonly MainWindow? _mainWindow;
 
     private void PushToGbr(List<MaterialEntry> materials)
     {
-        _mainWindow?.AddLog($"推送 {materials.Count} 项到 GBR...", LogLevel.Info);
+        PublishLog($"推送 {materials.Count} 项到 GBR...", LogLevel.Info);
 
         // 优先复用已缓存的有效需求/差额数据
         Dictionary<uint, int>? deficitMap = null;
@@ -438,7 +442,7 @@ private readonly MainWindow? _mainWindow;
             {
                 _gbrPushNotification = "所有采集材料已齐全，无需采集";
                 _log.Information("GBR 推送: 所有采集材料已齐全");
-                _mainWindow?.AddLog("所有采集材料已齐全，无需推送", LogLevel.Success);
+                PublishLog("所有采集材料已齐全，无需推送", LogLevel.Success);
                 return;
             }
         }
@@ -448,7 +452,7 @@ private readonly MainWindow? _mainWindow;
         {
             _gbrPushNotification = null;
             _log.Information("无可采集材料需要推送");
-            _mainWindow?.AddLog("无可采集材料需要推送", LogLevel.Warning);
+            PublishLog("无可采集材料需要推送", LogLevel.Warning);
             return;
         }
 
@@ -457,7 +461,7 @@ private readonly MainWindow? _mainWindow;
         var count = deficitMap?.Count ?? materials.Count(m => m.Source == MaterialSource.Gatherable);
         _gbrPushNotification = $"GBR 采集清单已复制到剪贴板\n（{count} 种，总需求量）";
         _log.Information($"GBR 推送完成 (base64, onlyMissing={_config.OnlyMissingMaterials}, hqOnly={_config.HqOnly})");
-        _mainWindow?.AddLog($"GBR 采集清单（{count} 种）已复制到剪贴板", LogLevel.Success);
+        PublishLog($"GBR 采集清单（{count} 种）已复制到剪贴板", LogLevel.Success);
     }
 
     public void DrawGbrNotification()
@@ -507,73 +511,9 @@ private readonly MainWindow? _mainWindow;
 
     private void CraftWithArtisan(List<CraftStep> steps, List<MaterialEntry>? materials)
     {
-        if (steps.Count == 0) { _log.Information("无制作步骤"); return; }
-        if (!_artisanIpc.IsAvailable) { _log.Warning("Artisan 不可用"); return; }
-
-        if (materials is not null && materials.Count > 0)
-        {
-            // 检查材料是否充足：考虑半成品（effective needs）扣减
-            bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
-            List<(MaterialEntry Entry, int Deficit)> missing;
-
-            if (_config.OnlyMissingMaterials && _bomRoot is not null)
-            {
-                // 使用有效需求（含半成品扣减），再扣除原材料背包库存
-                var effectiveNeeds = InventoryHelper.CalculateEffectiveNeeds(_bomRoot, useHq);
-                missing = materials
-                    .Where(m => effectiveNeeds.TryGetValue(m.ItemId, out int need) && need > 0)
-                    .Select(m =>
-                    {
-                        int owned = InventoryHelper.GetItemCount(m.ItemId, false);
-                        int deficit = Math.Max(0, effectiveNeeds[m.ItemId] - owned);
-                        return (m, deficit);
-                    })
-                    .Where(x => x.deficit > 0)
-                    .ToList();
-            }
-            else
-            {
-                var inv = InventoryHelper.CheckInventory(materials, useHq);
-                missing = inv.Where(i => i.Deficit > 0)
-                    .Select(i => (i.Entry, i.Deficit))
-                    .ToList();
-            }
-
-            if (missing.Count > 0)
-            {
-                var names = string.Join(", ", missing.Take(3).Select(m => $"{m.Entry.ItemName} 缺{m.Deficit}"));
-                if (missing.Count > 3) names += $" 等{missing.Count}种";
-                _log.Warning($"材料不足，无法开始制作: {names}");
-                return;
-            }
-        }
-
-        // 过滤：已有半成品跳过制作或减少制作次数
-        var filteredSteps = steps
-            .Select(s =>
-            {
-                int owned = InventoryHelper.GetItemCount(s.ItemId, false);
-                if (owned <= 0) return (Step: s, Skip: false);
-
-                int yield = s.AmountResult > 0 ? s.AmountResult : 1;
-                int totalProduced = s.Quantity * yield;
-                if (owned >= totalProduced)
-                {
-                    _log.Information($"跳过制作 {s.ItemName}（已有 {owned}，需要 {totalProduced}）");
-                    return (Step: s, Skip: true);
-                }
-
-                int stillNeeded = totalProduced - owned;
-                s.Quantity = Math.Max(1, (int)Math.Ceiling((double)stillNeeded / yield));
-                _log.Information($"调整制作 {s.ItemName}：需要 {stillNeeded} 件，制作 {s.Quantity} 次 (yield={yield})");
-                return (Step: s, Skip: false);
-            })
-            .Where(x => !x.Skip)
-            .Select(x => x.Step)
-            .ToList();
-
-        _progressManager.Start(filteredSteps);
-        _artisanIpc.SetEnduranceStatus(true);
+        // 业务逻辑委托给 CraftOrchestrator（P4 重构：Widget 只负责 UI 和回调触发）
+        var filteredSteps = _craftOrchestrator.TryStartCraft(steps, materials, _bomRoot);
+        if (filteredSteps is null) return;
 
         OnStartCrafting?.Invoke(filteredSteps);
     }

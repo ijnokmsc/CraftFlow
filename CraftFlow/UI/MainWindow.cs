@@ -75,6 +75,7 @@ public sealed class MainWindow : Window
         ArtisanIpcClient artisanIpc,
         IpcAvailabilityChecker ipcChecker,
         CraftProgressManager progressManager,
+        CraftOrchestrator craftOrchestrator,
         CraftProgressWindow craftProgressWindow,
         JobIconService jobIconService,
         ItemIconService itemIconService,
@@ -101,7 +102,10 @@ public sealed class MainWindow : Window
         _jobIconService = jobIconService;
         _itemIconService = itemIconService;
 
-        var materialListWidget = new MaterialListWidget(gbrIpc, artisanIpc, ipcChecker, _progressManager, config, log, _itemIconService, this);
+        var materialListWidget = new MaterialListWidget(
+            gbrIpc, artisanIpc, ipcChecker, craftOrchestrator, config, log, _itemIconService);
+        // 订阅日志事件（解耦：Widget 不再反向持有 MainWindow 引用）
+        materialListWidget.OnLog += (msg, level) => AddLog(msg, level);
         // 设置制作开始回调：显示进度窗口，隐藏主窗口
         materialListWidget.OnStartCrafting = (steps) =>
         {
