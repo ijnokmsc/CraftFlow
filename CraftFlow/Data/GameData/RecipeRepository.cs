@@ -215,13 +215,19 @@ public sealed class RecipeRepository
                     continue;
                 }
 
+                // 获取收藏品等级（结果物品的 LevelItem，用于评分区间分组）
+                int collectableLevel = 0;
+                if (recipe.Value.ItemResult.IsValid && recipe.Value.ItemResult.Value.LevelItem.IsValid)
+                    collectableLevel = (int)recipe.Value.ItemResult.Value.LevelItem.RowId;
+
                 result.Add(new CollectibleInfo
                 {
                     RecipeId = recipe.Value.RowId,
                     ItemId = itemId,
                     ItemName = itemName,
                     ScripType = itemScripType,
-                    ScoreThresholds = scoreTiers
+                    ScoreThresholds = scoreTiers,
+                    CollectableLevel = collectableLevel
                 });
             }
         }

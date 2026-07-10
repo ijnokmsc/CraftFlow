@@ -29,6 +29,11 @@ public sealed class CollectibleInfo
     /// 评分区间列表，每个区间包含最低评分和对应票数奖励。
     /// </summary>
     public List<ScoreTier> ScoreThresholds { get; set; } = [];
+
+    /// <summary>
+    /// 收藏品等级（结果物品的 LevelItem），用于 91-100/81-90 评分区间分组。
+    /// </summary>
+    public int CollectableLevel { get; set; }
 }
 
 /// <summary>

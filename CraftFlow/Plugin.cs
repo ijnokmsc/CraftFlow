@@ -44,6 +44,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfig _config;
     private readonly CraftProgressManager _progressManager;
     private readonly CraftOrchestrator _craftOrchestrator;
+    private readonly CollectibleCalculator _collectibleCalculator;
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly JobIconService _jobIconService;
     private readonly ItemIconService _itemIconService;
@@ -91,6 +92,9 @@ public sealed class Plugin : IDalamudPlugin
         // 制作编排服务（从 MaterialListWidget.CraftWithArtisan 提取，P4 重构）
         _craftOrchestrator = new CraftOrchestrator(_config, Log, _progressManager, _artisanIpc);
 
+        // 收藏品计算服务（收藏品制作 Tab 专用）
+        _collectibleCalculator = new CollectibleCalculator(_recipeRepo, _bomExpander, Log);
+
         // 职业图标服务（外部 PNG 文件）
         // API 15: PluginInterface.AssemblyLocation → 插件 DLL 路径 → 其所在目录即为插件目录
         var pluginDir = Path.GetDirectoryName(PluginInterface.AssemblyLocation.FullName) ?? "";
@@ -118,6 +122,7 @@ public sealed class Plugin : IDalamudPlugin
             _ipcChecker,
             _progressManager,
             _craftOrchestrator,
+            _collectibleCalculator,
             _craftProgressWindow,
             _jobIconService,
             _itemIconService,

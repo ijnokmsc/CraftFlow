@@ -35,6 +35,7 @@ public sealed class MainWindow : Window
     private readonly ConsumableTab _consumableTab;
     private readonly FavoritesTab _favoritesTab;
     private readonly RecommendationTab _recommendationTab;
+    private readonly CollectablesTab _collectablesTab;
     private readonly CraftProgressManager _progressManager;
     private readonly CraftProgressWindow _craftProgressWindow;
     private readonly StatusBarWidget _statusBar;
@@ -76,6 +77,7 @@ public sealed class MainWindow : Window
         IpcAvailabilityChecker ipcChecker,
         CraftProgressManager progressManager,
         CraftOrchestrator craftOrchestrator,
+        CollectibleCalculator collectibleCalculator,
         CraftProgressWindow craftProgressWindow,
         JobIconService jobIconService,
         ItemIconService itemIconService,
@@ -121,13 +123,24 @@ public sealed class MainWindow : Window
             bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
             materialListWidget, config, luminaCache, _itemIconService, log);
 
+        _collectablesTab = new CollectablesTab(
+            bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
+            collectibleCalculator, materialListWidget, config, _itemIconService, log);
+
         _favoritesTab = new FavoritesTab(presetService, () => _equipmentTab.GetSelectedTargets(), log);
         _favoritesTab.SetTargetLoadedCallback((targets, name) =>
         {
             bool isConsumable = targets.Any(t => t.Type == TargetType.Consumable);
+            bool isCollectible = targets.Any(t => t.Type == TargetType.Collectible);
             _equipmentTab.ClearSelection();
             _consumableTab.ClearSelection();
-            if (isConsumable)
+            _collectablesTab.ClearSelection();
+            if (isCollectible)
+            {
+                _collectablesTab.AddTargets(targets);
+                _currentTab = TabType.Collectables;
+            }
+            else if (isConsumable)
             {
                 _consumableTab.AddTargets(targets);
                 _currentTab = TabType.Consumable;
@@ -145,6 +158,7 @@ public sealed class MainWindow : Window
         {
             _equipmentTab.ClearSelection();
             _consumableTab.ClearSelection();
+            _collectablesTab.ClearSelection();
             _equipmentTab.SetLoadedFavName(name);
             _equipmentTab.AddTargets(targets);
             _currentTab = TabType.Equipment;
@@ -166,8 +180,8 @@ public sealed class MainWindow : Window
 
     private void DrawTabBar()
     {
-        var tabNames = new[] { " ⚔ 装备武器", " ♨ 食物药品", " ★ 收藏清单", " ▶ 推荐套装" };
-        var tabTypes = new[] { TabType.Equipment, TabType.Consumable, TabType.Favorites, TabType.Recommendations };
+        var tabNames = new[] { " ⚔ 装备武器", " ♨ 食物药品", " ◆ 收藏品", " ★ 收藏清单", " ▶ 推荐套装" };
+        var tabTypes = new[] { TabType.Equipment, TabType.Consumable, TabType.Collectables, TabType.Favorites, TabType.Recommendations };
 
         for (int i = 0; i < tabNames.Length; i++)
         {
@@ -200,6 +214,9 @@ public sealed class MainWindow : Window
             case TabType.Consumable:
                 _consumableTab.DrawLeftPanel();
                 break;
+            case TabType.Collectables:
+                _collectablesTab.DrawLeftPanel();
+                break;
             case TabType.Favorites:
                 _favoritesTab.DrawLeftPanel();
                 break;
@@ -219,6 +236,9 @@ public sealed class MainWindow : Window
                 break;
             case TabType.Consumable:
                 _consumableTab.DrawRightPanel();
+                break;
+            case TabType.Collectables:
+                _collectablesTab.DrawRightPanel();
                 break;
             case TabType.Favorites:
                 _favoritesTab.DrawRightPanel();

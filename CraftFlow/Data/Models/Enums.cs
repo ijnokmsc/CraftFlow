@@ -87,7 +87,10 @@ public enum TabType
     Favorites,
 
     /// <summary>推荐套装 Tab</summary>
-    Recommendations
+    Recommendations,
+
+    /// <summary>收藏品制作 Tab</summary>
+    Collectables
 }
 
 /// <summary>
