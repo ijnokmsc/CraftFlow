@@ -53,6 +53,12 @@ public sealed class LuminaCache
     public Dictionary<uint, CollectablesShopRewardScrip> CollectablesShopRewardScripSheet { get; private set; } = [];
 
     /// <summary>
+    /// 物品系列/资料片数据（ItemSeries），以 RowId 为键。
+    /// 用于判定收藏品所属资料片（Dawntrail=金曦之遗辉），过滤旧版收藏品。
+    /// </summary>
+    public Dictionary<uint, ItemSeries> ItemSeriesSheet { get; private set; } = [];
+
+    /// <summary>
     /// 职业数据，用于装备分类。
     /// </summary>
     public Dictionary<uint, ClassJob> ClassJobSheet { get; private set; } = [];
@@ -186,6 +192,18 @@ public sealed class LuminaCache
         else
         {
             _log.Warning("无法加载 CollectablesShopRewardScrip Sheet");
+        }
+
+        // 加载物品系列/资料片数据（用于收藏品资料片过滤）
+        var itemSeriesSheet = _dataManager.GetExcelSheet<ItemSeries>();
+        if (itemSeriesSheet is not null)
+        {
+            ItemSeriesSheet = itemSeriesSheet.ToDictionary(row => row.RowId, row => row);
+            _log.Information($"已加载 {ItemSeriesSheet.Count} 条 ItemSeries 数据");
+        }
+        else
+        {
+            _log.Warning("无法加载 ItemSeries Sheet");
         }
 
         // 加载职业数据

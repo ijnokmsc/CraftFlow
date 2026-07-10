@@ -34,6 +34,16 @@ public sealed class CollectibleInfo
     /// 收藏品等级（结果物品的 LevelItem），用于 91-100/81-90 评分区间分组。
     /// </summary>
     public int CollectableLevel { get; set; }
+
+    /// <summary>
+    /// 制作职业 ID（CraftType RowId），用于按职业分类。
+    /// </summary>
+    public uint CraftTypeId { get; set; }
+
+    /// <summary>
+    /// 制作职业名称（中文，如 木工/锻冶），用于分组标题显示。
+    /// </summary>
+    public string CraftTypeName { get; set; } = string.Empty;
 }
 
 /// <summary>

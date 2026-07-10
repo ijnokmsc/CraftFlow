@@ -85,7 +85,9 @@ public sealed class MaterialListWidget
     /// <param name="craftSteps">制作步骤列表（可为空）。</param>
     /// <param name="availableHeight">可用高度（0 表示自动）。</param>
     /// <param name="bomRoot">BOM 树根节点（用于缺失材料计算，可为 null）。</param>
-    public void DrawMaterialPanel(List<MaterialEntry> materials, List<CraftStep>? craftSteps, float availableHeight = 0, BomNode? bomRoot = null)
+    /// <param name="footer">渲染在滚动列表与按钮栏之间的自定义内容（如收藏品评分档位）。</param>
+    /// <param name="footerHeight">footer 预估高度（用于从列表高度中扣除，0 表示不预留）。</param>
+    public void DrawMaterialPanel(List<MaterialEntry> materials, List<CraftStep>? craftSteps, float availableHeight = 0, BomNode? bomRoot = null, Action? footer = null, float footerHeight = 0)
     {
         _bomRoot = bomRoot;
 
@@ -101,13 +103,17 @@ public sealed class MaterialListWidget
         // 计算按钮栏高度（按钮行 + 提示区域，比之前少了 Checkbox 行）
         const float buttonAreaHeight = 65f;
 
-        // 材料列表（可滚动）
-        float listHeight = availableHeight > 0 ? availableHeight - buttonAreaHeight : ImGui.GetContentRegionAvail().Y - buttonAreaHeight;
+        // 材料列表（可滚动）；若有 footer 则额外扣除其预估高度
+        float reserved = buttonAreaHeight + (footer is not null ? footerHeight : 0);
+        float listHeight = availableHeight > 0 ? availableHeight - reserved : ImGui.GetContentRegionAvail().Y - reserved;
         if (listHeight < 50) listHeight = 50;
 
         ImGui.BeginChild("MaterialScrollList", new Vector2(0, listHeight), false);
         DrawSummaryTable(materials, _effectiveNeedsCache);
         ImGui.EndChild();
+
+        // footer（滚动区与按钮栏之间）
+        footer?.Invoke();
 
         // 按钮栏（固定底部）
         DrawButtonBar(materials, craftSteps);

@@ -14,9 +14,9 @@ using CraftFlow.UI.Widgets;
 namespace CraftFlow.UI.Tabs;
 
 /// <summary>
-/// 收藏品制作 Tab，按工票类型（橙/紫）+ 评分区间分组展示收藏品。
-/// 左面板：工票筛选 → 评分区间分组 → 收藏品列表，每项带制作次数步进器。
-/// 右面板：评分档位信息 + 材料清单汇总 + 一键 Artisan 制作。
+/// 收藏品制作 Tab，按制作职业分类、二级按评分区间分组展示收藏品。
+/// 左面板：职业图标按钮行（能工巧匠 + 8 职业图标）→ 评分区间分组 → 收藏品列表。
+/// 右面板：材料清单汇总（上）+ 精简评分档位行（下）+ 一键 Artisan 制作。
 /// </summary>
 public sealed class CollectablesTab
 {
@@ -24,14 +24,15 @@ public sealed class CollectablesTab
     private readonly MaterialAggregator _materialAggregator;
     private readonly CraftOrderCalculator _craftOrderCalculator;
     private readonly RecipeRepository _recipeRepo;
-    private readonly CollectibleCalculator _collectibleCalc;
     private readonly MaterialListWidget _materialListWidget;
     private readonly PluginConfig _config;
     private readonly IPluginLog _log;
     private readonly ItemIconService _itemIconService;
+    private readonly JobIconService _jobIconService;
 
     private string _searchFilter = string.Empty;
-    private int _scripFilter = 0; // 0=全部, 1=紫票(Purple), 2=橙票(Orange)
+    private int _selectedCraftType = -1; // -1=全部, 0-7=对应制作职业
+    private ScripType? _scripFilter = null; // null=全部, Orange=仅橙票, Purple=仅紫票
     private readonly List<CollectibleTarget> _selectedItems = [];
     private BomNode? _bomResult;
     private List<MaterialEntry> _materialSummary = [];
@@ -42,10 +43,13 @@ public sealed class CollectablesTab
     private readonly Dictionary<uint, int> _turnOverrides = [];
 
     // 缓存
-    private Dictionary<ScripType, List<CollectibleInfo>>? _collectiblesCache;
+    private List<CollectibleInfo>? _allCollectibles;
     private bool _cacheInitialized = false;
 
-    // 评分区间分组（与 Artisan UI 对齐）
+    // CraftType RowId (0-7) → ClassJobId (8-15)
+    private static readonly uint[] CraftTypeToClassJobId = [8, 9, 10, 11, 12, 13, 14, 15];
+
+    // 评分区间分组
     private static readonly (int Min, int Max, string Label)[] ScoreBands =
     [
         (91, 100, "91-100"),
@@ -54,9 +58,6 @@ public sealed class CollectablesTab
         (61, 70, "61-70"),
         (50, 60, "50-60"),
     ];
-
-    private static readonly Vector4 ColorPurpleScrip = new(0.6f, 0.4f, 0.9f, 1f);
-    private static readonly Vector4 ColorOrangeScrip = new(0.9f, 0.6f, 0.2f, 1f);
 
     /// <summary>选中的收藏品目标（含制作次数）。</summary>
     private sealed class CollectibleTarget
@@ -70,20 +71,20 @@ public sealed class CollectablesTab
         MaterialAggregator materialAggregator,
         CraftOrderCalculator craftOrderCalculator,
         RecipeRepository recipeRepo,
-        CollectibleCalculator collectibleCalc,
         MaterialListWidget materialListWidget,
         PluginConfig config,
         ItemIconService itemIconService,
+        JobIconService jobIconService,
         IPluginLog log)
     {
         _bomExpander = bomExpander;
         _materialAggregator = materialAggregator;
         _craftOrderCalculator = craftOrderCalculator;
         _recipeRepo = recipeRepo;
-        _collectibleCalc = collectibleCalc;
         _materialListWidget = materialListWidget;
         _config = config;
         _itemIconService = itemIconService;
+        _jobIconService = jobIconService;
         _log = log;
     }
 
@@ -93,7 +94,62 @@ public sealed class CollectablesTab
 
     public void DrawLeftPanel()
     {
-        DrawScripFilter();
+        // === 第一排：8 个制作职业图标 | 橙票 | 紫票 过滤按钮（同一行，自适应尺寸）===
+        float gap = 4f;
+        float availW = ImGui.GetContentRegionAvail().X;
+        // 预留：8个职业 + 1个"|"分隔符 + 2个票按钮 + 其中间距
+        int totalSlots = CraftTypeToClassJobId.Length + 1 + 2; // 11 个元素
+        float slotW = Math.Min(24f, (availW - gap * (totalSlots - 1)) / totalSlots);
+        slotW = Math.Max(slotW, 14f);
+
+        for (int i = 0; i < CraftTypeToClassJobId.Length; i++)
+        {
+            uint classJobId = CraftTypeToClassJobId[i];
+            var icon = _jobIconService.GetJobIcon(classJobId);
+
+            bool isSelected = (_selectedCraftType == i);
+            if (isSelected)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.95f, 0.75f, 0.15f, 0.9f));
+                ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(1f, 0.85f, 0.3f, 1f));
+                ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 2f);
+            }
+
+            bool clicked = false;
+            if (icon.Handle != 0)
+                clicked = ImGui.ImageButton(icon, new Vector2(slotW, slotW));
+            else
+            {
+                ImGui.SetNextItemWidth(slotW + 6);
+                clicked = ImGui.Button($"{i}");
+            }
+
+            if (isSelected)
+            {
+                ImGui.PopStyleVar();
+                ImGui.PopStyleColor(2);
+            }
+
+            if (clicked)
+                _selectedCraftType = _selectedCraftType == i ? -1 : i;
+
+            // 最后一个图标后面跟分隔符或票按钮
+            if (i < CraftTypeToClassJobId.Length - 1)
+                ImGui.SameLine(0, gap);
+        }
+
+        // 分隔符 |
+        ImGui.SameLine(0, gap);
+        ImGui.Text("|");
+        ImGui.SameLine(0, gap);
+
+        // 橙票过滤按钮（巧手橙票 物品41784 → Icon 65110），尺寸与职业图标一致
+        DrawScripFilterBtn(ScripType.OrangeScrip, 41784u, slotW);
+
+        // 紫票过滤按钮（巧手紫票 物品33913 → Icon 65088），紧邻橙票，无分隔符，无文字
+        ImGui.SameLine(0, gap);
+        DrawScripFilterBtn(ScripType.PurpleScrip, 33913u, slotW);
+
         ImGui.Separator();
 
         // 搜索框
@@ -101,18 +157,14 @@ public sealed class CollectablesTab
         ImGui.InputTextWithHint("###CollectableSearch", "搜索收藏品...", ref _searchFilter, 100);
         ImGui.Separator();
 
-        // 懒加载缓存
+        // 懒加载缓存（一次性加载全部）
         if (!_cacheInitialized)
         {
-            _collectiblesCache = new()
-            {
-                [ScripType.PurpleScrip] = _recipeRepo.GetCollectibles(ScripType.PurpleScrip),
-                [ScripType.OrangeScrip] = _recipeRepo.GetCollectibles(ScripType.OrangeScrip),
-            };
+            _allCollectibles = _recipeRepo.GetAllCollectibles();
             _cacheInitialized = true;
         }
 
-        if (_collectiblesCache is null || _collectiblesCache.Count == 0)
+        if (_allCollectibles is null || _allCollectibles.Count == 0)
         {
             ImGui.BeginChild("CollectableList");
             ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1f), "暂无收藏品数据");
@@ -120,70 +172,111 @@ public sealed class CollectablesTab
             return;
         }
 
-        var purple = FilterItems(_collectiblesCache[ScripType.PurpleScrip]);
-        var orange = FilterItems(_collectiblesCache[ScripType.OrangeScrip]);
-
-        ImGui.BeginChild("CollectableList");
-
-        if (purple.Count > 0)
+        var filtered = FilterItems(_allCollectibles);
+        if (filtered.Count == 0)
         {
-            DrawScoreBandGroup(purple, "巧手紫票", ColorPurpleScrip);
-        }
-        if (orange.Count > 0 && purple.Count > 0)
-        {
-            ImGui.Spacing();
-        }
-        if (orange.Count > 0)
-        {
-            DrawScoreBandGroup(orange, "巧手橙票", ColorOrangeScrip);
-        }
-
-        if (purple.Count == 0 && orange.Count == 0)
-        {
+            ImGui.BeginChild("CollectableList");
             ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f),
                 string.IsNullOrWhiteSpace(_searchFilter) ? "无匹配的收藏品" : $"未找到匹配 \"{_searchFilter}\" 的收藏品");
+            ImGui.EndChild();
+            return;
+        }
+
+        // === 评分区间分组（不再按职业折叠，职业已由图标行筛选）===
+        ImGui.BeginChild("CollectableList");
+        foreach (var (min, max, label) in ScoreBands)
+        {
+            var bandItems = filtered.Where(i => i.CollectableLevel >= min && i.CollectableLevel <= max).ToList();
+            if (bandItems.Count == 0) continue;
+
+            if (ImGui.CollapsingHeader($"{label} ({bandItems.Count})###Band_{min}_{max}", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                foreach (var item in bandItems)
+                    DrawItemRow(item);
+            }
+        }
+
+        // 不在任何区间的物品归入"其他"
+        var otherItems = filtered.Where(i => i.CollectableLevel < ScoreBands[^1].Min).ToList();
+        if (otherItems.Count > 0)
+        {
+            if (ImGui.CollapsingHeader($"其他 ({otherItems.Count})###Band_other"))
+            {
+                foreach (var item in otherItems)
+                    DrawItemRow(item);
+            }
         }
 
         ImGui.EndChild();
     }
 
     /// <summary>
-    /// 工票类型筛选下拉框。
+    /// 工票类型过滤按钮：仅显示游戏图标，尺寸与职业图标一致（iconSize），互斥切换。
+    /// itemId 为真实工票物品（橙=41784 巧手橙票 / 紫=33913 巧手紫票），走已验证可用的 GetItemIcon 路径。
     /// </summary>
-    private void DrawScripFilter()
+    private void DrawScripFilterBtn(ScripType type, uint itemId, float iconSize)
     {
-        ImGui.Text("工票:");
-        ImGui.SameLine();
+        bool isOn = _scripFilter == type;
+        Vector4 color = ScripTypeColor(type);
 
-        string currentLabel = _scripFilter switch
+        if (isOn)
         {
-            0 => "全部",
-            1 => "紫票",
-            2 => "橙票",
-            _ => "全部"
-        };
-
-        ImGui.SetNextItemWidth(65);
-        if (ImGui.BeginCombo("###CollectableScripFilter", currentLabel))
-        {
-            if (ImGui.Selectable("全部###Scrip_all", _scripFilter == 0)) _scripFilter = 0;
-            if (ImGui.Selectable("紫票###Scrip_purple", _scripFilter == 1)) _scripFilter = 1;
-            if (ImGui.Selectable("橙票###Scrip_orange", _scripFilter == 2)) _scripFilter = 2;
-            ImGui.EndCombo();
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(color.X, color.Y, color.Z, 0.95f));
+            ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(color.X, color.Y, color.Z, 1f));
+            ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 2f);
         }
+
+        var scripIcon = _itemIconService.GetItemIcon(itemId);
+        bool clicked;
+        if (scripIcon.Handle != 0)
+            clicked = ImGui.ImageButton(scripIcon.Handle, new Vector2(iconSize, iconSize));
+        else
+            clicked = ImGui.Button($"{(type == ScripType.OrangeScrip ? "橙" : "紫")}###Filter_{type}", new Vector2(iconSize, iconSize));
+
+        if (isOn)
+        {
+            ImGui.PopStyleVar();
+            ImGui.PopStyleColor(2);
+        }
+
+        if (clicked)
+            _scripFilter = isOn ? null : type;
     }
 
     /// <summary>
-    /// 按工票类型和搜索词过滤列表。
+    /// 按像素宽度截断文本，超出部分加省略号。
+    /// </summary>
+    private static string TruncateText(string text, float maxWidth)
+    {
+        if (string.IsNullOrEmpty(text) || maxWidth <= 0) return text ?? "";
+        var size = ImGui.CalcTextSize(text);
+        if (size.X <= maxWidth) return text;
+
+        // 二分查找截断点
+        int lo = 0, hi = text.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (ImGui.CalcTextSize(text.AsSpan(0, mid).ToString() + "…").X <= maxWidth)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return lo > 0 ? text.AsSpan(0, lo).ToString() + "…" : "…";
+    }
+
+    /// <summary>
+    /// 按职业图标筛选 + 搜索词过滤。
     /// </summary>
     private List<CollectibleInfo> FilterItems(List<CollectibleInfo> items)
     {
-        // 工票类型过滤（0=全部不过滤）
-        if (_scripFilter != 0)
-        {
-            var filterType = _scripFilter == 1 ? ScripType.PurpleScrip : ScripType.OrangeScrip;
-            items = items.Where(i => i.ScripType == filterType).ToList();
-        }
+        // 职业筛选（-1=全部）
+        if (_selectedCraftType >= 0)
+            items = items.Where(i => i.CraftTypeId == (uint)_selectedCraftType).ToList();
+
+        // 工票类型筛选（null=全部）
+        if (_scripFilter.HasValue)
+            items = items.Where(i => i.ScripType == _scripFilter.Value).ToList();
 
         // 搜索词过滤
         if (!string.IsNullOrWhiteSpace(_searchFilter))
@@ -193,40 +286,6 @@ public sealed class CollectablesTab
         }
 
         return items;
-    }
-
-    /// <summary>
-    /// 按评分区间分组的列表渲染。
-    /// </summary>
-    private void DrawScoreBandGroup(List<CollectibleInfo> items, string title, Vector4 color)
-    {
-        foreach (var (min, max, label) in ScoreBands)
-        {
-            var bandItems = items.Where(i => i.CollectableLevel >= min && i.CollectableLevel <= max).ToList();
-            if (bandItems.Count == 0) continue;
-
-            ImGui.PushStyleColor(ImGuiCol.Text, color);
-            if (ImGui.CollapsingHeader($"{label} ({bandItems.Count})###Band_{min}_{max}"))
-            {
-                ImGui.PopStyleColor();
-                foreach (var item in bandItems)
-                    DrawItemRow(item);
-            }
-            else
-            {
-                ImGui.PopStyleColor();
-            }
-        }
-
-        // 不在任何区间的物品归入"其他"
-        var otherItems = items.Where(i => i.CollectableLevel < ScoreBands[^1].Min).ToList();
-        if (otherItems.Count > 0)
-        {
-            ImGui.TextColored(color, $"{title}: 其他 ({otherItems.Count})");
-            ImGui.Separator();
-            foreach (var item in otherItems)
-                DrawItemRow(item);
-        }
     }
 
     /// <summary>
@@ -257,15 +316,21 @@ public sealed class CollectablesTab
 
         ImGui.SameLine();
 
-        // 物品图标 + 名称
+        // 物品图标 + 名称（名称过长自动截断）
         var nameColor = isSelected ? new Vector4(0.2f, 0.9f, 0.2f, 1f) : new Vector4(1f, 1f, 1f, 1f);
         var icon = _itemIconService.GetItemIcon(info.ItemId);
+
+        // 预留：图标20px + 等级~45px + 票数~45px + 步进器(~90px) + 间距
+        float nameMaxW = ImGui.GetContentRegionAvail().X - 200f;
+        if (nameMaxW < 40f) nameMaxW = 40f;
+        string displayName = TruncateText(info.ItemName, nameMaxW);
+
         if (icon.Handle != 0)
         {
             ImGui.Image(icon, new Vector2(20, 20));
             ImGui.SameLine();
         }
-        ImGui.TextColored(nameColor, info.ItemName);
+        ImGui.TextColored(nameColor, displayName);
 
         // 等级
         if (info.CollectableLevel > 0)
@@ -274,29 +339,27 @@ public sealed class CollectablesTab
             ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), $"{info.CollectableLevel}级");
         }
 
-        // 星级（根据评分档位数量）
+        // 最高档票数（彩色表示票类型，删除星级）
         if (info.ScoreThresholds.Count > 0)
         {
+            var top = info.ScoreThresholds.OrderByDescending(t => t.MinScore).First();
             ImGui.SameLine();
-            string stars = new string('★', Math.Min(info.ScoreThresholds.Count, 3));
-            ImGui.TextColored(new Vector4(0.85f, 0.7f, 0.2f, 1f), stars);
+            ImGui.TextColored(ScripTypeColor(info.ScripType), $"{top.ScripReward}票");
         }
 
-        // 选中后显示次数步进器
+        // 选中后显示次数步进器（同行紧凑）
         if (isSelected)
         {
             ImGui.SameLine();
             var target = _selectedItems.First(t => t.Info.ItemId == info.ItemId);
             int turns = target.Turns;
 
-            if (ImGui.Button("-###Minus") && turns > 1) { turns--; UpdateTurns(info.ItemId, turns); }
+            if (ImGui.Button("-###Minus", new Vector2(18, 0)) && turns > 1) { turns--; UpdateTurns(info.ItemId, turns); }
             ImGui.SameLine();
-            ImGui.SetNextItemWidth(45);
+            ImGui.SetNextItemWidth(30);
             if (ImGui.InputInt("###Turns", ref turns, 0, 0)) { UpdateTurns(info.ItemId, turns); }
             ImGui.SameLine();
-            if (ImGui.Button("+###Plus")) { turns++; UpdateTurns(info.ItemId, turns); }
-            ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "次");
+            if (ImGui.Button("+###Plus", new Vector2(18, 0))) { turns++; UpdateTurns(info.ItemId, turns); }
         }
 
         ImGui.PopID();
@@ -323,7 +386,7 @@ public sealed class CollectablesTab
             return;
         }
 
-        // === 行1：标题 + 操作按钮 ===
+        // === 标题 + 操作按钮 ===
         int totalTurns = _selectedItems.Sum(t => t.Turns);
         ImGui.Text($"材料清单 ({_selectedItems.Count} 种收藏品, 共 {totalTurns} 次)");
         ImGui.SameLine(ImGui.GetContentRegionAvail().X - 120);
@@ -332,12 +395,8 @@ public sealed class CollectablesTab
             ClearSelection();
         }
 
-        // === 收藏品特有信息块 ===
+        // === 视图 / 显示 / 缺失 选项分组（作用于材料清单）===
         ImGui.Spacing();
-        DrawCollectibleInfoBlock();
-        ImGui.Separator();
-
-        // === 行2：视图 / 显示 / 缺失 选项分组 ===
         ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), "视图");
         ImGui.SameLine();
         ImGui.Checkbox("树视图###Coll_ShowTreeView", ref _showTreeView);
@@ -376,77 +435,96 @@ public sealed class CollectablesTab
 
         ImGui.Separator();
 
-        // 材料面板（复用共享 Widget）
+        // === 材料清单（复用共享 Widget）===
+        // 评分档位作为 footer 传入 DrawMaterialPanel，渲染在滚动区与「制作」按钮栏之间
         if (_showTreeView && _bomResult is not null)
+        {
             _materialListWidget.DrawTree(_bomResult);
+            ImGui.Separator();
+            DrawTicketCalcBlock();
+        }
         else
+        {
+            float ticketBlockH = EstimateTicketBlockHeight();
             _materialListWidget.DrawMaterialPanel(
-                _materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y, _bomResult);
+                _materialSummary, _craftSteps, ImGui.GetContentRegionAvail().Y, _bomResult,
+                footer: DrawTicketCalcBlock, footerHeight: ticketBlockH);
+        }
     }
 
     /// <summary>
-    /// 渲染收藏品特有信息块：评分档位、票数奖励、推荐目标分数。
+    /// 估算「评分档位」块所需高度。汇总模式下最多 2 行（紫/橙各一）。
     /// </summary>
-    private void DrawCollectibleInfoBlock()
+    private float EstimateTicketBlockHeight()
     {
-        foreach (var target in _selectedItems)
+        int lineCount = 0;
+        if (_selectedItems.Any(t => t.Info.ScripType == ScripType.PurpleScrip && t.Info.ScoreThresholds.Count > 0))
+            lineCount++;
+        if (_selectedItems.Any(t => t.Info.ScripType == ScripType.OrangeScrip && t.Info.ScoreThresholds.Count > 0))
+            lineCount++;
+        return Math.Max(lineCount, 1) * 20f + 8f;
+    }
+
+    /// <summary>
+    /// 根据工票类型返回显示颜色（橙票=橙、紫票=紫），用颜色区分节省空间。
+    /// </summary>
+    private static Vector4 ScripTypeColor(ScripType type) => type switch
+    {
+        ScripType.OrangeScrip => new Vector4(0.95f, 0.55f, 0.15f, 1f),  // 橙
+        ScripType.PurpleScrip => new Vector4(0.7f, 0.45f, 0.95f, 1f),   // 紫
+        _ => new Vector4(0.85f, 0.7f, 0.2f, 1f)
+    };
+
+    /// <summary>
+    /// 汇总评分档位行：将所有选中收藏品的档位按票类型聚合为一行。
+    /// 格式 "评分档位(紫): ★★★|xxx；★★|xxx；★|xxx" （无该类型则不显示）
+    /// </summary>
+    private void DrawTicketCalcBlock()
+    {
+        // 按 ScripType 分组汇总
+        var purpleItems = _selectedItems.Where(t => t.Info.ScripType == ScripType.PurpleScrip && t.Info.ScoreThresholds.Count > 0).ToList();
+        var orangeItems = _selectedItems.Where(t => t.Info.ScripType == ScripType.OrangeScrip && t.Info.ScoreThresholds.Count > 0).ToList();
+
+        void DrawSummary(ScripType type, List<CollectibleTarget> items)
         {
-            var info = target.Info;
-            var tierColor = info.ScripType == ScripType.PurpleScrip ? ColorPurpleScrip : ColorOrangeScrip;
+            if (items.Count == 0) return;
 
-            // 物品名行
-            ImGui.TextColored(tierColor, info.ItemName);
-
-            if (info.CollectableLevel > 0)
+            // 找出最多档位数，用于对齐星级显示
+            int maxTiers = items.Max(i => i.Info.ScoreThresholds.Count);
+            var parts = new List<string>();
+            for (int tierIdx = 0; tierIdx < maxTiers; tierIdx++)
             {
-                ImGui.SameLine();
-                ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1f), $"{info.CollectableLevel}级 | {target.Turns}次");
-            }
-
-            // 评分档位表
-            if (info.ScoreThresholds.Count > 0)
-            {
-                if (ImGui.BeginTable($"Tiers_{info.ItemId}", 3,
-                        ImGuiTableFlags.Borders | ImGuiTableFlags.SizingFixedFit))
+                int grandTotal = 0;
+                bool anyHasThisTier = false;
+                foreach (var target in items)
                 {
-                    ImGui.TableSetupColumn("最低评分", ImGuiTableColumnFlags.WidthFixed, 70);
-                    ImGui.TableSetupColumn("票数", ImGuiTableColumnFlags.WidthFixed, 55);
-                    ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableHeadersRow();
-
-                    foreach (var tier in info.ScoreThresholds.OrderByDescending(t => t.MinScore))
+                    var sorted = target.Info.ScoreThresholds.OrderByDescending(t => t.MinScore).ToList();
+                    if (tierIdx < sorted.Count)
                     {
-                        ImGui.TableNextRow();
-                        ImGui.TableNextColumn();
-                        ImGui.Text($"{tier.MinScore}");
-                        ImGui.TableNextColumn();
-                        ImGui.TextColored(tierColor, $"{tier.ScripReward}");
-                        ImGui.TableNextColumn();
-                        ImGui.Text("票");
-
-                        // 「按此档计算次数」按钮
-                        ImGui.TableNextColumn();
-                        ImGui.PushID($"TierBtn_{info.ItemId}_{tier.MinScore}");
-                        if (ImGui.SmallButton("算次数###CalcTurns"))
+                        int starsCount = sorted.Count - tierIdx;
+                        if (starsCount <= 3) // 只取最高3星
                         {
-                            int craftCount = _collectibleCalc.CalculateCraftCount(
-                                info, tier.ScripReward * 3, tier.MinScore);
-                            if (craftCount > 0)
-                            {
-                                target.Turns = craftCount;
-                                _turnOverrides[info.ItemId] = craftCount;
-                                RecalculateBom();
-                            }
+                            grandTotal += sorted[tierIdx].ScripReward * target.Turns;
+                            anyHasThisTier = true;
                         }
-                        if (ImGui.IsItemHovered())
-                            ImGui.SetTooltip($"按目标{tier.ScripReward*1}票反推所需制作次数\n(使用 CollectibleCalculator)");
-                        ImGui.PopID();
                     }
-
-                    ImGui.EndTable();
+                }
+                if (anyHasThisTier && grandTotal > 0)
+                {
+                    int starCount = Math.Min(maxTiers - tierIdx, 3);
+                    string stars = new string('★', starCount);
+                    parts.Add($"{stars}|{grandTotal}票");
                 }
             }
+
+            if (parts.Count > 0)
+            {
+                ImGui.TextColored(ScripTypeColor(type), $"评分档位: {string.Join("；", parts)}");
+            }
         }
+
+        DrawSummary(ScripType.PurpleScrip, purpleItems);
+        DrawSummary(ScripType.OrangeScrip, orangeItems);
     }
 
     // ================================================================
@@ -476,13 +554,9 @@ public sealed class CollectablesTab
             {
                 // 从缓存查找 CollectibleInfo
                 CollectibleInfo? info = null;
-                if (_collectiblesCache is not null)
+                if (_allCollectibles is not null)
                 {
-                    foreach (var list in _collectiblesCache.Values)
-                    {
-                        info = list.FirstOrDefault(i => i.ItemId == t.ItemId);
-                        if (info is not null) break;
-                    }
+                    info = _allCollectibles.FirstOrDefault(i => i.ItemId == t.ItemId);
                 }
 
                 if (info is not null)

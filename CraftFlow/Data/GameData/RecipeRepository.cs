@@ -173,28 +173,45 @@ public sealed class RecipeRepository
     }
 
     /// <summary>
-    /// 根据工票类型获取收藏品配方列表（含评分/票数映射）。
+    /// 获取全部收藏品配方列表（不分工票类型），并按职业填充分类信息。
+    /// 收藏品名称统一加"收藏用"前缀，便于按职业分类展示。
     /// </summary>
-    /// <param name="scripType">工票类型（橙票/紫票）。</param>
     /// <returns>收藏品信息列表。</returns>
-    public List<CollectibleInfo> GetCollectibles(ScripType scripType)
+    public List<CollectibleInfo> GetAllCollectibles()
     {
         var result = new List<CollectibleInfo>();
+        int totalSubrows = 0, skippedNoItem = 0, skippedNoTiers = 0, skippedNoRecipe = 0, skippedBySeries = 0;
+
+        _log.Debug($"GetAllCollectibles(): CollectablesShopItemSheet 共 {_cache.CollectablesShopItemSheet.Count} 个 RowId");
 
         foreach (var (rowId, subrows) in _cache.CollectablesShopItemSheet)
         {
             // 遍历子行（同一 RowId 下可能有多个收藏品变体）
             foreach (var shopItem in subrows)
             {
+                totalSubrows++;
+
+                bool hasRefine = shopItem.CollectablesShopRefine.IsValid;
+                bool hasRewardScrip = shopItem.CollectablesShopRewardScrip.IsValid;
+
                 if (!shopItem.Item.IsValid || shopItem.Item.Value.RowId == 0)
                 {
+                    skippedNoItem++;
+                    _log.Debug($"  SKIP[无Item] RowId={rowId} Item.IsValid={shopItem.Item.IsValid}");
                     continue;
                 }
 
-                // 判断工票类型（使用新的 CollectablesShopRewardScrip 表）
-                var itemScripType = DetermineScripType(shopItem);
-                if (itemScripType != scripType)
+                var itemId = shopItem.Item.Value.RowId;
+                var rawName = _cache.GetItemName(itemId);
+
+                // 仅保留制作职业收藏品（游戏内命名为"收藏用…"），排除：
+                //  - 旧版"面向收藏家的…"/"收藏家…"系列（Endwalker 及更早）
+                //  - "改良用…"采集职业收藏品（不属于制作职业，不应出现在制作 Tab）
+                // 注意：ItemSeries.Name 在收藏品数据上恒为空，不能用资料片系列名过滤。
+                if (!IsCraftCollectable(rawName))
                 {
+                    skippedBySeries++;
+                    _log.Debug($"  SKIP[非制作收藏品] RowId={rowId} Item={itemId}({rawName})");
                     continue;
                 }
 
@@ -202,38 +219,77 @@ public sealed class RecipeRepository
                 var scoreTiers = GetScoreTiersForCollectable(shopItem);
                 if (scoreTiers.Count == 0)
                 {
+                    skippedNoTiers++;
+                    _log.Debug($"  SKIP[无档位] RowId={rowId} Item={itemId}({rawName}) RefineValid={hasRefine} RewardScripValid={hasRewardScrip}");
                     continue;
                 }
-
-                var itemId = shopItem.Item.Value.RowId;
-                var itemName = _cache.GetItemName(itemId);
 
                 // 查找关联配方
                 var recipe = FindRecipeByItem(itemId);
                 if (recipe is null)
                 {
+                    skippedNoRecipe++;
+                    _log.Debug($"  SKIP[无配方] RowId={rowId} Item={itemId}({rawName})");
                     continue;
                 }
 
-                // 获取收藏品等级（结果物品的 LevelItem，用于评分区间分组）
-                int collectableLevel = 0;
-                if (recipe.Value.ItemResult.IsValid && recipe.Value.ItemResult.Value.LevelItem.IsValid)
-                    collectableLevel = (int)recipe.Value.ItemResult.Value.LevelItem.RowId;
+                // 获取收藏品等级（配方的 RecipeLevelTable.ClassJobLevel，用于评分区间分组）
+                int collectableLevel = recipe.Value.RecipeLevelTable.IsValid
+                    ? recipe.Value.RecipeLevelTable.Value.ClassJobLevel
+                    : 0;
+
+                // 制作职业（CraftType RowId → 名称）
+                uint craftTypeId = recipe.Value.CraftType.IsValid ? recipe.Value.CraftType.Value.RowId : 0;
+                string craftTypeName = craftTypeId != 0 ? _cache.GetCraftTypeName(craftTypeId) : "未知";
+
+                // 名称：原始名可能已含"收藏用"前缀（游戏数据），避免重复添加
+                string displayName = rawName.StartsWith("收藏用") ? rawName : "收藏用" + rawName;
 
                 result.Add(new CollectibleInfo
                 {
                     RecipeId = recipe.Value.RowId,
                     ItemId = itemId,
-                    ItemName = itemName,
-                    ScripType = itemScripType,
+                    ItemName = displayName,
+                    ScripType = DetermineScripType(shopItem),
                     ScoreThresholds = scoreTiers,
-                    CollectableLevel = collectableLevel
+                    CollectableLevel = collectableLevel,
+                    CraftTypeId = craftTypeId,
+                    CraftTypeName = craftTypeName
                 });
             }
         }
 
-        _log.Debug($"GetCollectibles({scripType}): 找到 {result.Count} 个收藏品");
+        _log.Debug($"GetAllCollectibles(): 原始子行={totalSubrows}, 无效Item={skippedNoItem}, 非制作收藏品={skippedBySeries}, 无评分档位={skippedNoTiers}, 无配方={skippedNoRecipe} → 最终={result.Count} 个收藏品");
+
+        // 详细诊断日志：逐条输出以便与 Artisan 对比
+        foreach (var c in result.OrderBy(c => c.CollectableLevel).ThenBy(c => c.CraftTypeId))
+        {
+            _log.Debug($"  [{c.CraftTypeName}] Lv{c.CollectableLevel} | {c.ItemName}(Item={c.ItemId}) | Recipe={c.RecipeId} | {c.ScripType} | 档位数={c.ScoreThresholds.Count}");
+        }
+
         return result;
+    }
+
+    /// <summary>
+    /// 判定物品是否属于制作职业收藏品。
+    /// 游戏内制作收藏品统一以"收藏用"开头（如"收藏用雪松长弓"）；
+    /// "改良用…"为采集职业收藏品，"面向收藏家的…"/"收藏家…"为旧版系列，均排除。
+    /// 注意：ItemSeries.Name 在收藏品数据上恒为空，不能据此按资料片过滤。
+    /// </summary>
+    private bool IsCraftCollectable(string itemName)
+    {
+        return itemName.StartsWith("收藏用");
+    }
+
+    /// <summary>
+    /// 根据工票类型获取收藏品配方列表（含评分/票数映射）。
+    /// 已废弃按工票分类的 UI；保留以便兼容，内部委托 GetAllCollectibles 后过滤。
+    /// </summary>
+    /// <param name="scripType">工票类型（橙票/紫票）。</param>
+    /// <returns>收藏品信息列表。</returns>
+    public List<CollectibleInfo> GetCollectibles(ScripType scripType)
+    {
+        return GetAllCollectibles().Where(i => i.ScripType == scripType).ToList();
     }
 
     /// <summary>
@@ -341,25 +397,21 @@ public sealed class RecipeRepository
 
     /// <summary>
     /// 根据 CollectablesShopItem 判断工票类型。
-    /// 在 Dalamud 15/Lumina 新版中，通过 CollectablesShopRewardScrip.Currency 字段判断：
-    /// Currency=1 为橙票，Currency=2 为紫票（具体值需根据游戏数据验证）。
+    /// 通过 CollectablesShopRewardScrip.Currency 字段判断（已用真实游戏数据验证）：
+    ///   Currency=6 → 巧手橙票（橙票），对应 Lv100 收藏品
+    ///   Currency=2/4/7 → 巧手紫票（紫票），对应其余等级（Lv50-99 等）
+    /// 注意：不能用 ">= 2" 这种阈值，否则会把 Lv100 的橙票（Currency=6）误判为紫票。
     /// </summary>
     private ScripType DetermineScripType(CollectablesShopItem shopItem)
     {
         if (shopItem.CollectablesShopRewardScrip.IsValid)
         {
-            var rewardScrip = shopItem.CollectablesShopRewardScrip.Value;
-            // CollectablesShopRewardScrip.Currency:
-            // 值为 1 或特定范围 → 橙票
-            // 值为 2 或其他 → 紫票
-            // 基于简化判断，后续需根据实际 Lumina 数据修正
-            if (rewardScrip.Currency >= 2)
-            {
-                return ScripType.PurpleScrip;
-            }
+            int currency = (int)shopItem.CollectablesShopRewardScrip.Value.Currency;
+            if (currency == 6)
+                return ScripType.OrangeScrip;
         }
 
-        return ScripType.OrangeScrip;
+        return ScripType.PurpleScrip;
     }
 
     /// <summary>

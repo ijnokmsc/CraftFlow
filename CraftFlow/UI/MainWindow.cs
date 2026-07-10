@@ -125,7 +125,7 @@ public sealed class MainWindow : Window
 
         _collectablesTab = new CollectablesTab(
             bomExpander, materialAggregator, craftOrderCalculator, recipeRepo,
-            collectibleCalculator, materialListWidget, config, _itemIconService, log);
+            materialListWidget, config, _itemIconService, _jobIconService, log);
 
         _favoritesTab = new FavoritesTab(presetService, () => _equipmentTab.GetSelectedTargets(), log);
         _favoritesTab.SetTargetLoadedCallback((targets, name) =>
@@ -203,7 +203,7 @@ public sealed class MainWindow : Window
     {
         float leftWidth = ImGui.GetContentRegionAvail().X * 0.45f;
         float rightWidth = ImGui.GetContentRegionAvail().X * 0.53f;
-        float contentHeight = ImGui.GetContentRegionAvail().Y - 55f;
+        float contentHeight = ImGui.GetContentRegionAvail().Y - 28f;
 
         ImGui.BeginChild("LeftPanel", new Vector2(leftWidth, contentHeight), true);
         switch (_currentTab)
