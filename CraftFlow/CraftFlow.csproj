@@ -4,8 +4,11 @@
          Dalamud.NET.Sdk Sdk.props 在 csproj PropertyGroup 之前求值，其第28行无条件设置
          DalamudLibPath，但 AssemblySearchPaths 也在 Sdk.props 中设置（使用 DalamudLibPath）。
          csproj PropertyGroup 在 SDK import 之后求值，可以覆盖所有属性。
-         实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\ -->
-    <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+         实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\。
+         CI 中由 setup-dalamud 通过 DALAMUD_HOME 环境变量提供 Dalamud 安装目录，
+         本地（未设置 DALAMUD_HOME）回退到国服 XIVLauncherCN 路径。 -->
+    <DalamudLibPath Condition=" '$(DALAMUD_HOME)' == '' ">$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+    <DalamudLibPath Condition=" '$(DALAMUD_HOME)' != '' ">$(DALAMUD_HOME)/</DalamudLibPath>
     <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
     <Version>0.2.9.0</Version>
     <PackageProjectUrl>https://github.com/CraftFlow/CraftFlow</PackageProjectUrl>
@@ -24,7 +27,7 @@
   </ItemGroup>
 
   <!-- 编译后自动部署到 XIVLauncherCN devPlugins 目录 -->
-  <Target Name="DeployToDevPlugins" AfterTargets="Build">
+  <Target Name="DeployToDevPlugins" AfterTargets="Build" Condition=" '$(GITHUB_ACTIONS)' != 'true' ">
     <MakeDir Directories="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" />
     <Copy SourceFiles="$(OutputPath)CraftFlow.dll" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(OutputPath)CraftFlow.json" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\CraftFlow\" SkipUnchangedFiles="true" Condition="Exists('$(OutputPath)CraftFlow.json')" />
