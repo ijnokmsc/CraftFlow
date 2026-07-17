@@ -30,6 +30,9 @@ public sealed class CraftOrchestrator
     private readonly CraftProgressManager _progressManager;
     private readonly ArtisanIpcClient _artisanIpc;
 
+    /// <summary>最后一次尝试制作失败的原因（供 UI 在右侧提示）。成功时为 null。</summary>
+    public string? LastErrorMessage { get; private set; }
+
     public CraftOrchestrator(
         PluginConfig config,
         IPluginLog log,
@@ -58,27 +61,41 @@ public sealed class CraftOrchestrator
     /// <returns>过滤后待执行的步骤列表；若中止返回 null。</returns>
     public List<CraftStep>? TryStartCraft(List<CraftStep> steps, List<MaterialEntry>? materials, BomNode? bomRoot)
     {
+        LastErrorMessage = null;
+
         if (steps.Count == 0)
         {
-            _log.Information("无制作步骤");
+            LastErrorMessage = "无制作步骤";
+            _log.Information(LastErrorMessage);
             return null;
         }
 
         if (!_artisanIpc.IsAvailable)
         {
-            _log.Warning("Artisan 不可用");
+            LastErrorMessage = "Artisan 不可用，请先在插件列表中安装并启用 Artisan";
+            _log.Warning(LastErrorMessage);
             return null;
         }
 
         if (materials is not null && materials.Count > 0)
         {
-            if (!ValidateMaterialsSufficient(materials, bomRoot))
+            var (sufficient, reason) = ValidateMaterialsSufficient(materials, bomRoot);
+            if (!sufficient)
             {
+                LastErrorMessage = reason;
                 return null;
             }
         }
 
         var filteredSteps = FilterStepsByInventory(steps);
+
+        // 过滤后可能所有步骤都被背包库存满足 → 无需制作
+        if (filteredSteps.Count == 0)
+        {
+            LastErrorMessage = "背包库存已满足全部需求，无需制作";
+            _log.Information(LastErrorMessage);
+            return null;
+        }
 
         _progressManager.Start(filteredSteps);
         _artisanIpc.SetEnduranceStatus(true);
@@ -92,7 +109,7 @@ public sealed class CraftOrchestrator
     /// - 其他：直接用 CheckInventory 检查原材料缺口
     /// </summary>
     /// <returns>true 表示充足；false 表示不足（已记录日志）。</returns>
-    private bool ValidateMaterialsSufficient(List<MaterialEntry> materials, BomNode? bomRoot)
+    private (bool Sufficient, string? Reason) ValidateMaterialsSufficient(List<MaterialEntry> materials, BomNode? bomRoot)
     {
         bool useHq = _config.OnlyMissingMaterials && _config.HqOnly;
         List<(MaterialEntry Entry, int Deficit)> missing;
@@ -124,11 +141,12 @@ public sealed class CraftOrchestrator
         {
             var names = string.Join(", ", missing.Take(3).Select(m => $"{m.Entry.ItemName} 缺{m.Deficit}"));
             if (missing.Count > 3) names += $" 等{missing.Count}种";
+            var reason = $"材料不足：{names}";
             _log.Warning($"材料不足，无法开始制作: {names}");
-            return false;
+            return (false, reason);
         }
 
-        return true;
+        return (true, null);
     }
 
     /// <summary>
@@ -142,6 +160,16 @@ public sealed class CraftOrchestrator
         return steps
             .Select(s =>
             {
+                // 成品（最终产物）严格按用户选择的制作次数执行，不因背包已有成品而减少；
+                // 仅半成品（中间产物，Depth>0）才根据背包已有量跳过/减少，避免重复消耗材料。
+                // 这与 InventoryHelper / MaterialListWidget 中「Depth==0 不扣成品库存」的约定一致。
+                // 否则会出现「选了制作151次、包里已有4个成品却被减成147次」的问题。
+                if (s.IsFinalProduct)
+                {
+                    _log.Information($"成品 {s.ItemName} 不按背包库存扣减，直接制作 {s.Quantity} 次");
+                    return (Step: s, Skip: false);
+                }
+
                 int owned = InventoryHelper.GetItemCount(s.ItemId, false);
                 if (owned <= 0) return (Step: s, Skip: false);
 

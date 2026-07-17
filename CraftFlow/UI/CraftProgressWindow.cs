@@ -55,6 +55,7 @@ public sealed class CraftProgressWindow : Window
     private static readonly Vector4 ColorGreen  = new(0.2f, 0.9f, 0.2f, 1f);
     private static readonly Vector4 ColorOrange = new(0.9f, 0.6f, 0.2f, 1f);
     private static readonly Vector4 ColorRed    = new(1.0f, 0.3f, 0.3f, 1f);
+    private static readonly Vector4 ColorGray   = new(0.6f, 0.6f, 0.6f, 1f);
 
     /// <summary>当制作流程结束（完成/停止）时触发，用于恢复主窗口。</summary>
     public event Action? CraftingEnded;
@@ -64,13 +65,13 @@ public sealed class CraftProgressWindow : Window
         ArtisanIpcClient artisanIpc,
         IPluginLog log)
         : base("CraftFlow 制作进度###CraftFlowProgressWindow",
-               ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse)
+               ImGuiWindowFlags.NoCollapse)
     {
         _progressManager = progressManager;
         _artisanIpc = artisanIpc;
         _log = log;
 
-        Size = new Vector2(360, 200);
+        Size = new Vector2(480, 440);
         SizeCondition = ImGuiCond.FirstUseEver;
         IsOpen = false;
     }
@@ -202,11 +203,21 @@ public sealed class CraftProgressWindow : Window
 
         // ── 总进度条 ────────────────────────────────
         var pct = _progressManager.Percent;
-        ImGui.Text($"总进度: {p.CompletedSteps} / {p.TotalSteps}");
+        ImGui.Text($"总进度: {p.CompletedSteps} / {p.TotalSteps} (次)");
         ImGui.ProgressBar(pct, new Vector2(ImGui.GetContentRegionAvail().X, 22),
                           $"{p.CompletedSteps}/{p.TotalSteps}");
 
-        ImGui.Spacing();
+        // ── 制作清单进度表格（半成品 + 成品） ─────────
+        // 仅当步骤数 >= 2 时用表格展示完整流程；单步骤时顶部「正在制作」+ 总进度条已足够，
+        // 避免孤零零一张 1 行表格 + 汇总行（冗余）。
+        float reserveBottom = 64f; // 状态文字 + 停止按钮预留高度
+        float listH = ImGui.GetContentRegionAvail().Y - reserveBottom;
+        if (p.Steps.Count >= 2 && listH > 50)
+        {
+            ImGui.BeginChild("StepListChild", new Vector2(-1, listH), true);
+            DrawStepProgressTable();
+            ImGui.EndChild();
+        }
 
         // ── 状态文字 ─────────────────────────────────
         if (_pollState == PollState.Stopping || p.RequestedStop)
@@ -240,6 +251,108 @@ public sealed class CraftProgressWindow : Window
         if (p.IsComplete || (_pollState == PollState.Idle && _pendingCraftSteps is null))
         {
             CloseAndNotify();
+        }
+    }
+
+    /// <summary>
+    /// 绘制制作清单进度表格：列出本次制作的所有步骤（半成品 + 成品），
+    /// 显示每步的制作次数进度与状态（进行中/完成/等待），当前步高亮并自动滚动到可见。
+    /// 底部追加总进度汇总行。
+    /// </summary>
+    private void DrawStepProgressTable()
+    {
+        var p = _progressManager.Progress;
+        if (p is null || p.Steps.Count == 0) return;
+
+        // 表格标志：可滚动 + 行背景 + 内水平边框 + 列宽可调 + 自动调整列宽以适应内容
+        var flags = ImGuiTableFlags.RowBg
+                  | ImGuiTableFlags.BordersInnerH
+                  | ImGuiTableFlags.Resizable
+                  | ImGuiTableFlags.ScrollY          // 允许垂直滚动（长列表）
+                  | ImGuiTableFlags.SizingFixedFit;  // 列宽固定，溢出滚动
+
+        if (ImGui.BeginTable("CraftStepTbl", 3, flags))
+        {
+            // 固定列宽，物品名自适应剩余空间
+            ImGui.TableSetupColumn("物品", ImGuiTableColumnFlags.WidthStretch, 1.0f);
+            ImGui.TableSetupColumn("进度(次)", ImGuiTableColumnFlags.WidthFixed, 80);
+            ImGui.TableSetupColumn("状态", ImGuiTableColumnFlags.WidthFixed, 64);
+            ImGui.TableHeadersRow();
+
+            int scrollToIdx = p.IsComplete ? -1 : p.CurrentStepIndex;
+
+            for (int i = 0; i < p.Steps.Count; i++)
+            {
+                var s = p.Steps[i];
+                bool isCurrent = i == p.CurrentStepIndex && !p.IsComplete;
+                bool isDone = s.IsDone;
+
+                ImGui.TableNextRow();
+
+                // 当前行背景色：进行中=淡橙，完成=淡绿，等待=默认
+                if (isCurrent)
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
+                        ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.7f, 0.3f, 0.18f)));
+                else if (isDone)
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
+                        ImGui.ColorConvertFloat4ToU32(new Vector4(0.2f, 0.8f, 0.2f, 0.12f)));
+
+                // ── 物品名 ──────────────────────────────
+                ImGui.TableNextColumn();
+                string prefix = isCurrent ? "▶ " : (isDone ? "✓ " : "  ");
+                ImGui.Text($"{prefix}{s.ItemName}");
+
+                // ── 进度 ────────────────────────────────
+                ImGui.TableNextColumn();
+
+                // 当前正在制作的步骤，显示含"正在做的那一个"的预估进度
+                int displayCompleted = s.CompletedQuantity;
+                if (isCurrent && _pollState == PollState.WaitIdle)
+                    displayCompleted = Math.Min(s.CompletedQuantity + 1, s.Quantity);
+
+                if (isDone)
+                    ImGui.TextColored(ColorGreen, $"{displayCompleted}/{s.Quantity}");
+                else if (isCurrent)
+                    ImGui.TextColored(ColorOrange, $"{displayCompleted}/{s.Quantity}");
+                else
+                    ImGui.TextColored(ColorGray, $"0/{s.Quantity}");
+
+                // ── 状态 ────────────────────────────────
+                ImGui.TableNextColumn();
+                if (isDone)
+                    ImGui.TextColored(ColorGreen, "已完成");
+                else if (isCurrent)
+                    ImGui.TextColored(ColorOrange, "制作中");
+                else
+                    ImGui.TextColored(ColorGray, "未制作");
+
+                // 自动滚动：将当前步骤保持在可视区域中央附近
+                if (i == scrollToIdx)
+                    ImGui.SetScrollHereY(0.35f); // 滚到可视区约 35% 处（偏上，能看到前几步）
+            }
+
+            // ── 底部汇总行 ─────────────────────────────
+            ImGui.TableNextRow();
+            ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0,
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0.15f, 0.15f, 0.2f, 0.6f)));
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(new Vector4(0.9f, 0.9f, 0.5f, 1f), "📋 总进度");
+
+            ImGui.TableNextColumn();
+            float totalPct = p.TotalSteps > 0 ? (float)p.CompletedSteps / p.TotalSteps : 0;
+            var barColor = p.IsComplete ? ColorGreen : (totalPct > 0.5f ? ColorOrange : ColorRed);
+            ImGui.ProgressBar(totalPct, new Vector2(-1, 0), $"{p.CompletedSteps}/{p.TotalSteps}");
+
+            ImGui.TableNextColumn();
+            if (p.IsComplete)
+                ImGui.TextColored(ColorGreen, "已完成");
+            else if (_pollState == PollState.Stopping || p.RequestedStop)
+                ImGui.TextColored(ColorOrange, "停止中");
+            else
+                ImGui.TextColored(ColorOrange, "制作中");
+
+            ImGui.EndTable();
         }
     }
 

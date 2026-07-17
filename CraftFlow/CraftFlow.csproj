@@ -10,7 +10,7 @@
     <DalamudLibPath Condition=" '$(DALAMUD_HOME)' == '' ">$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
     <DalamudLibPath Condition=" '$(DALAMUD_HOME)' != '' ">$(DALAMUD_HOME)/</DalamudLibPath>
     <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
-    <Version>0.2.9.0</Version>
+    <Version>0.2.10.0</Version>
     <PackageProjectUrl>https://github.com/CraftFlow/CraftFlow</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

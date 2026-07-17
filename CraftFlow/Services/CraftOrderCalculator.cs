@@ -47,13 +47,25 @@ public sealed class CraftOrderCalculator
                     Quantity = node.Quantity,
                     AmountResult = node.AmountResult,
                     Order = i,
+                    IsFinalProduct = node.Depth == 0,
                     Status = StepStatus.Pending
                 });
             }
         }
 
-        // 合并同 ItemId 的步骤：当共用中间产物出现在多个分支时，合并为一条步骤
+        // 合并同 ItemId 的步骤：当共用中间产物出现在多个分支时，合并为一条步骤。
+        // 合并在「物品数」语义下进行（见 MergeDuplicateSteps：Quantity 按物品数求和）。
         steps = MergeDuplicateSteps(steps);
+
+        // ★ 修复单位错位（yield>1 半成品被多做/多耗原料、下游跳过的根因）★
+        // BomNode.Quantity 是「物品数」，但下游 Artisan / 过滤 / 进度都把它当「制作次数」。
+        // 这里在合并后统一转为「制作次数」= ceil(物品数 / 单次产量)，否则 yield>1 的半成品
+        // 会被多做约 yield 倍、原材料被多耗约 yield 倍，导致下游材料耗尽而跳过。
+        foreach (var s in steps)
+        {
+            int y = s.AmountResult > 0 ? s.AmountResult : 1;
+            s.Quantity = (int)Math.Ceiling((double)s.Quantity / y);
+        }
 
         // 重新编号 Order，使序号连续
         for (int i = 0; i < steps.Count; i++)
@@ -142,6 +154,7 @@ public sealed class CraftOrderCalculator
                     Quantity = list.Sum(s => s.Quantity),
                     AmountResult = list[0].AmountResult,
                     Order = list.Min(s => s.Order),
+                    IsFinalProduct = list[0].IsFinalProduct,
                     Status = StepStatus.Pending
                 });
             }

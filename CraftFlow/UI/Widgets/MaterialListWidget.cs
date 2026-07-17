@@ -38,6 +38,9 @@ public sealed class MaterialListWidget
     private int _treeNodeIdCounter;
     private string? _gbrPushNotification;
 
+    // 一键制作失败原因（按钮栏右侧提示）
+    private string? _craftError;
+
     // 列表中选中的物品 ID（-1 表示无选中）
     private uint _selectedItemId = uint.MaxValue;
 
@@ -416,9 +419,19 @@ public sealed class MaterialListWidget
 
         ImGui.SameLine();
 
-        // 右栏：通知
+        // 右栏：通知 / 制作错误提示
         ImGui.BeginChild("BtnRight", new Vector2(0, h), false);
-        DrawGbrNotification();
+        if (_craftError is not null)
+        {
+            ImGui.TextColored(ColorRed, "⚠ 无法开始制作");
+            ImGui.TextWrapped(_craftError);
+            if (ImGui.SmallButton("清除###DismissCraftErr"))
+                _craftError = null;
+        }
+        else
+        {
+            DrawGbrNotification();
+        }
         ImGui.EndChild();
     }
 
@@ -519,8 +532,15 @@ public sealed class MaterialListWidget
     {
         // 业务逻辑委托给 CraftOrchestrator（P4 重构：Widget 只负责 UI 和回调触发）
         var filteredSteps = _craftOrchestrator.TryStartCraft(steps, materials, _bomRoot);
-        if (filteredSteps is null) return;
+        if (filteredSteps is null)
+        {
+            // 材料不足 / Artisan 不可用等：在右侧提示
+            _craftError = _craftOrchestrator.LastErrorMessage ?? "无法开始制作（原因未知）";
+            _log.Warning($"一键制作未开始: {_craftError}");
+            return;
+        }
 
+        _craftError = null;
         OnStartCrafting?.Invoke(filteredSteps);
     }
 

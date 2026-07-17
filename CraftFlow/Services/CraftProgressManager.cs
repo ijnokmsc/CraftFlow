@@ -27,9 +27,8 @@ public sealed class CraftProgressManager
     /// <summary>用 CraftStep 列表创建新进度。</summary>
     public void Start(List<CraftStep> steps)
     {
-        // TotalSteps 改为"总物品数"（各步骤 Quantity 之和），而非步骤数。
-        // 这样"做 3 个同样地东西"合并成 1 步(Quantity=3)时，
-        // TotalSteps=3，进度条 0/3 → 3/3，符合用户直觉。
+        // TotalSteps = 各步骤制作次数(Quantity)之和（CraftStep.Quantity 语义为"制作次数"）。
+        // 进度条按制作次数累计，与 CraftProgressWindow 每完成 1 次 AdvanceOneItem 对齐。
         int totalItems = steps.Sum(s => s.Quantity);
         _config.CraftProgress = new CraftProgress
         {
