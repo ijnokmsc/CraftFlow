@@ -42,15 +42,31 @@ public sealed class EquipmentSetService
     public List<CraftTarget> AddWeaponSet(RoleGroup role, uint classJobId, int quantity = 1, int? patchVersion = null)
     {
         var targets = new List<CraftTarget>();
-        var weaponSlots = new[] { EquipmentSlotType.MainHand, EquipmentSlotType.OffHand };
 
-        foreach (var slot in weaponSlots)
+        // 先取最佳主手武器；无主手则整组为空（某些职业/版本可能没有可制作主手）
+        var mainHand = _equipRepo.GetBestInSlot(role, EquipmentSlotType.MainHand, hqOnly: true, classJobId: classJobId, patchVersion: patchVersion);
+        if (mainHand is null)
         {
-            var best = _equipRepo.GetBestInSlot(role, slot, hqOnly: true, classJobId: classJobId, patchVersion: patchVersion);
-            if (best is not null)
+            _log.Debug($"AddWeaponSet({role.DisplayName}, {classJobId}): 无可用主手武器");
+            return targets;
+        }
+
+        targets.Add(EquipmentItemToTarget(mainHand, quantity));
+
+        // 仅当主手武器为单手（EquipSlotCategory.OffHand == 0）时才添加副手。
+        // 双手武器（MainHand != 0 且 OffHand != 0）本身占满主手与副手两个槽，
+        // 不存在独立的副手装备（如黑魔的法杖、武僧的拳套），强行加副手是 BUG。
+        if (!mainHand.IsTwoHanded)
+        {
+            var offHand = _equipRepo.GetBestInSlot(role, EquipmentSlotType.OffHand, hqOnly: true, classJobId: classJobId, patchVersion: patchVersion);
+            if (offHand is not null)
             {
-                targets.Add(EquipmentItemToTarget(best, quantity));
+                targets.Add(EquipmentItemToTarget(offHand, quantity));
             }
+        }
+        else
+        {
+            _log.Debug($"AddWeaponSet({role.DisplayName}, {classJobId}): 主手为双手武器，跳过副手");
         }
 
         _log.Debug($"AddWeaponSet({role.DisplayName}, {classJobId}): 添加 {targets.Count} 件武器");

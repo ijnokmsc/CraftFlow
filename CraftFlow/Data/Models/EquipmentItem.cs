@@ -32,6 +32,12 @@ public sealed class EquipmentItem
     public bool IsHq { get; set; }
 
     /// <summary>
+    /// 是否为双手武器（主手与副手槽同时占用，无独立副手）。
+    /// 由 EquipSlotCategory 的 MainHand/OffHand 字段判定：两者均非零即双手武器。
+    /// </summary>
+    public bool IsTwoHanded { get; set; }
+
+    /// <summary>
     /// 选择数量。
     /// </summary>
     public int Quantity { get; set; } = 1;

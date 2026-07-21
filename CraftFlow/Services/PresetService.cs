@@ -148,6 +148,7 @@ public sealed class PresetService
         if (preset.IncludeWeapon && equipRole is not null)
         {
             var addedWeaponIds = new HashSet<uint>();
+            bool anyOneHanded = false;
             foreach (var (jobId, _) in equipRole.Jobs)
             {
                 var weapon = _equipRepo.GetBestInSlot(equipRole, EquipmentSlotType.MainHand, preset.IsHq, jobId, patchVersion);
@@ -160,20 +161,27 @@ public sealed class PresetService
                         Quantity = 1,
                         Type = TargetType.Equipment
                     });
+                    // 记录该职业分组中是否存在单手武器职业
+                    if (!weapon.IsTwoHanded) anyOneHanded = true;
                 }
             }
 
-            // 也检查副手
-            var offHand = _equipRepo.GetBestInSlot(equipRole, EquipmentSlotType.OffHand, preset.IsHq, patchVersion: patchVersion);
-            if (offHand is not null && addedWeaponIds.Add(offHand.ItemId))
+            // 仅当职业分组中存在单手武器职业时才添加副手。
+            // 双手武器职业（黑魔/武僧/龙骑等）的主手占满主+副手两槽，无独立副手，
+            // 不应强行添加（修复误加副手 BUG）。
+            if (anyOneHanded)
             {
-                targets.Add(new CraftTarget
+                var offHand = _equipRepo.GetBestInSlot(equipRole, EquipmentSlotType.OffHand, preset.IsHq, patchVersion: patchVersion);
+                if (offHand is not null && addedWeaponIds.Add(offHand.ItemId))
                 {
-                    ItemId = offHand.ItemId,
-                    ItemName = offHand.ItemName,
-                    Quantity = 1,
-                    Type = TargetType.Equipment
-                });
+                    targets.Add(new CraftTarget
+                    {
+                        ItemId = offHand.ItemId,
+                        ItemName = offHand.ItemName,
+                        Quantity = 1,
+                        Type = TargetType.Equipment
+                    });
+                }
             }
         }
 

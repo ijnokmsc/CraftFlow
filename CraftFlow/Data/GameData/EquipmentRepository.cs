@@ -255,7 +255,8 @@ public sealed class EquipmentRepository
                 SlotType = slotType,
                 ItemLevel = item.LevelItem.IsValid ? (int)item.LevelItem.Value.RowId : 0,
                 IsHq = item.CanBeHq,
-                Quantity = 1
+                Quantity = 1,
+                IsTwoHanded = IsTwoHandedWeapon(item)
             };
 
             if (!result.TryGetValue(slotType, out var list))
@@ -376,7 +377,8 @@ public sealed class EquipmentRepository
                     SlotType = slot,
                     ItemLevel = ilvl,
                     IsHq = item.CanBeHq,
-                    Quantity = 1
+                    Quantity = 1,
+                    IsTwoHanded = IsTwoHandedWeapon(item)
                 };
             }
         }
@@ -431,6 +433,20 @@ public sealed class EquipmentRepository
         if (esc.FingerL != 0) return EquipmentSlotType.Fingers;
 
         return EquipmentSlotType.MainHand;
+    }
+
+    /// <summary>
+    /// 判断物品是否为双手武器：EquipSlotCategory 中 MainHand 与 OffHand 同时占用。
+    /// 双手武器（如黑魔的法杖、武僧的拳套）本身占满主手与副手两个槽，
+    /// 不存在独立的副手装备；单手武器（如白魔的权杖）只占主手，副手另算。
+    /// </summary>
+    /// <param name="item">Lumina Item 数据。</param>
+    /// <returns>true 表示双手武器。</returns>
+    private static bool IsTwoHandedWeapon(Item item)
+    {
+        if (!item.EquipSlotCategory.IsValid) return false;
+        var esc = item.EquipSlotCategory.Value;
+        return esc.MainHand != 0 && esc.OffHand != 0;
     }
 
     /// <summary>
