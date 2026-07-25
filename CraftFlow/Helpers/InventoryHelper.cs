@@ -86,26 +86,33 @@ public static class InventoryHelper
     /// 遍历 BOM 树时，如果某个非叶节点（半成品）在背包中已有库存，
     /// 则按比例减少其下级材料的需求量。
     /// 跨分支共享的中间产物库存会被追踪消费，避免不同分支重复扣减同一批库存。
+    /// 叶子材料按 ItemId 在遍历中累加原始量，遍历结束后统一 Ceiling 一次，
+    /// 消除「ceil 不可加」：共享叶不再被各分支重复 +1（如紫电灵砂/4级耐力之宝水多算）。
     /// </summary>
     /// <param name="root">BOM 树根节点。</param>
     /// <param name="hqOnly">是否只计 HQ 物品为已有。</param>
     /// <returns>以 ItemId 为键的有效需求量字典。</returns>
     public static Dictionary<uint, int> CalculateEffectiveNeeds(BomNode root, bool hqOnly)
     {
+        var rawNeeds = new Dictionary<uint, double>();
+        var inventoryConsumed = new Dictionary<uint, double>();
+        WalkForEffectiveNeeds(root, rawNeeds, hqOnly, 1.0, inventoryConsumed);
+
+        // 遍历结束后按 ItemId 统一 ceil 一次：共享叶只在 ItemId 维度进位，避免各分支各自进位导致多算
         var needs = new Dictionary<uint, int>();
-        var inventoryConsumed = new Dictionary<uint, int>();
-        WalkForEffectiveNeeds(root, needs, hqOnly, 1.0, inventoryConsumed);
+        foreach (var kvp in rawNeeds)
+            needs[kvp.Key] = (int)Math.Ceiling(kvp.Value);
         return needs;
     }
 
     /// <summary>
-    /// 递归遍历 BOM 树计算有效需求。
+    /// 递归遍历 BOM 树计算有效需求（内部累加原始 double 量，不在此处 ceil）。
     /// 对非叶节点（半成品），检查背包已有量并按比例缩减下级需求。
     /// inventoryConsumed 跨分支追踪已消费的中间产物库存，防止组合 BOM 树中
     /// 不同分支的同一中间产物重复扣减同一批库存。
     /// </summary>
-    private static void WalkForEffectiveNeeds(BomNode node, Dictionary<uint, int> needs,
-        bool hqOnly, double scale, Dictionary<uint, int> inventoryConsumed)
+    private static void WalkForEffectiveNeeds(BomNode node, Dictionary<uint, double> needs,
+        bool hqOnly, double scale, Dictionary<uint, double> inventoryConsumed)
     {
         // 根节点（ItemId == 0）：直接递归子节点
         if (node.ItemId == 0)
@@ -124,11 +131,11 @@ public static class InventoryHelper
             return;
         }
 
-        // 叶节点：原材料，累积到有效需求
+        // 叶节点：原材料，累加原始量（不 ceil、不强制 +1），由外层统一 ceil
         if (node.IsLeaf)
         {
-            int qty = Math.Max(1, (int)Math.Ceiling(node.Quantity * scale));
-            if (needs.TryGetValue(node.ItemId, out int existing))
+            double qty = node.Quantity * scale;
+            if (needs.TryGetValue(node.ItemId, out double existing))
                 needs[node.ItemId] = existing + qty;
             else
                 needs[node.ItemId] = qty;
@@ -136,32 +143,32 @@ public static class InventoryHelper
         }
 
         // 非叶节点（Depth > 0）：半成品（中间产品），检查背包已有量（扣除前序分支已消费量）
-        int totalNeeded = Math.Max(1, (int)Math.Ceiling(node.Quantity * scale));
-        int owned = GetItemCount(node.ItemId, hqOnly);
+        double totalNeeded = node.Quantity * scale;
+        double owned = GetItemCount(node.ItemId, hqOnly);
 
         // 扣除其他分支已消费的库存，防止共享中间产物被重复扣减
-        if (owned > 0 && inventoryConsumed.TryGetValue(node.ItemId, out int alreadyConsumed))
+        if (owned > 0 && inventoryConsumed.TryGetValue(node.ItemId, out double alreadyConsumed))
         {
             owned = Math.Max(0, owned - alreadyConsumed);
         }
 
-        int stillNeeded = owned < 0 ? totalNeeded : Math.Max(0, totalNeeded - owned);
+        double stillNeeded = owned < 0 ? totalNeeded : Math.Max(0, totalNeeded - owned);
 
         // 记录本次消费量（含已由前序分支消费量）
-        int consumedThisBranch = totalNeeded - stillNeeded;
+        double consumedThisBranch = totalNeeded - stillNeeded;
         if (consumedThisBranch > 0)
         {
-            if (inventoryConsumed.TryGetValue(node.ItemId, out int prev))
+            if (inventoryConsumed.TryGetValue(node.ItemId, out double prev))
                 inventoryConsumed[node.ItemId] = prev + consumedThisBranch;
             else
                 inventoryConsumed[node.ItemId] = consumedThisBranch;
         }
 
-        if (stillNeeded == 0)
+        if (stillNeeded <= 0)
             return; // 已有量（扣除已消费后）充足，跳过整棵子树
 
         // 按缩减比例递归处理下级材料
-        double childScale = scale * ((double)stillNeeded / totalNeeded);
+        double childScale = scale * (stillNeeded / totalNeeded);
         foreach (var child in node.Children)
             WalkForEffectiveNeeds(child, needs, hqOnly, childScale, inventoryConsumed);
     }
