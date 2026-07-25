@@ -46,6 +46,16 @@ public sealed class RecipeRepository
     }
 
     /// <summary>
+    /// 根据配方 RowId 查找配方（用于从制作步骤回溯其材料配方）。
+    /// </summary>
+    /// <param name="rowId">配方 RowId（对应 CraftStep.RecipeId / BomNode.RecipeId）。</param>
+    /// <returns>匹配的 Recipe，或 null（RowId 不存在）。</returns>
+    public Recipe? FindRecipeById(uint rowId)
+    {
+        return _cache.RecipeSheet.TryGetValue(rowId, out var recipe) ? recipe : null;
+    }
+
+    /// <summary>
     /// 根据 ItemId 查找所有关联配方。
     /// 同一物品可能被不同职业/不同版本的配方产出。
     /// </summary>

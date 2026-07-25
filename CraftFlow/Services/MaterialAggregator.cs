@@ -84,6 +84,77 @@ public sealed class MaterialAggregator
     }
 
     /// <summary>
+    /// 基于制作步骤聚合材料需求（单一事实来源，与 Artisan 实际消耗一致）。
+    /// 遍历每个步骤的配方，仅统计"非可制作"的叶材料（原材料），
+    /// 其消耗量 = 材料量 × 制作次数。可制作的中间产物由其自身的步骤负责统计，
+    /// 因此每种叶材料只被统计一次（合并后的制作次数）。
+    ///
+    /// 与 <see cref="Aggregate(BomNode, bool)"/> 的区别：旧方法遍历 BomExpander 逐目标
+    /// 独立展开的树，对共享中间产物在每个分支分别 ceil 再求和，导致装备套装等共享
+    /// 材料链时多算（ceil 不可加）。本方法直接复用 CraftOrderCalculator 已经合并、
+    /// 且换算为制作次数的步骤，保证清单 == 实际消耗。
+    /// </summary>
+    /// <param name="steps">拓扑排序、合并、已换算为制作次数的步骤列表。</param>
+    /// <param name="showCrystals">是否显示水晶/晶簇。默认 false（过滤）。</param>
+    /// <returns>去重聚合后的材料条目列表。</returns>
+    public List<MaterialEntry> AggregateFromSteps(List<CraftStep> steps, bool showCrystals = false)
+    {
+        var result = new Dictionary<uint, MaterialEntry>();
+
+        foreach (var step in steps)
+        {
+            var recipe = _recipeRepo.FindRecipeById(step.RecipeId);
+            if (recipe is null) continue;
+
+            int crafts = step.Quantity; // 已是制作次数 = ceil(物品数 / yield)
+            for (int i = 0; i < 8; i++)
+            {
+                var ingId = recipe.Value.Ingredient[i].RowId;
+                var ingAmt = recipe.Value.AmountIngredient[i];
+                if (ingId == 0 || ingAmt == 0) continue;
+
+                // 水晶/晶簇过滤
+                if (!showCrystals && IsCrystalOrCluster(ingId, _recipeRepo.GetItemName(ingId)))
+                    continue;
+
+                // 仅统计叶材料（非可制作）；可制作中间产物由自身步骤统计，避免重复计数
+                if (_recipeRepo.FindRecipeByItem(ingId).HasValue)
+                    continue;
+
+                int consumed = ingAmt * crafts;
+
+                // 诊断：打印每个步骤对叶材料的消耗（定位"多余物品"来源）
+                _log.Information($"[AggregateFromSteps] 步骤 {step.ItemName} 消耗叶材料 " +
+                    $"{_recipeRepo.GetItemName(ingId)}×{consumed} (ItemId={ingId})");
+
+                if (result.TryGetValue(ingId, out var existing))
+                {
+                    existing.TotalRequired += consumed;
+                }
+                else
+                {
+                    result[ingId] = new MaterialEntry
+                    {
+                        ItemId = ingId,
+                        ItemName = _recipeRepo.GetItemName(ingId),
+                        TotalRequired = consumed,
+                        Source = _recipeRepo.GetMaterialSource(ingId),
+                        IsHqRequired = false
+                    };
+                }
+            }
+        }
+
+        var list = result.Values.ToList();
+        list.Sort((a, b) => a.Source != b.Source
+            ? a.Source.CompareTo(b.Source)
+            : string.Compare(a.ItemName, b.ItemName, StringComparison.Ordinal));
+
+        _log.Debug($"MaterialAggregator: 从步骤聚合了 {list.Count} 种材料 (showCrystals={showCrystals})");
+        return list;
+    }
+
+    /// <summary>
     /// 深度优先遍历 BOM 树的叶节点，按 ItemId 聚合材料数量。
     /// </summary>
     /// <param name="node">当前遍历的节点。</param>
@@ -98,6 +169,9 @@ public sealed class MaterialAggregator
             {
                 return;
             }
+
+            // 诊断：打印每个叶节点的来源（父节点名称）
+            _log.Information($"[MaterialAggregator] 叶节点: {node.ItemName}×{node.Quantity} (ItemId={node.ItemId}, Depth={node.Depth})");
 
             // 叶节点：原材料，聚合到结果中
             if (result.TryGetValue(node.ItemId, out var existing))

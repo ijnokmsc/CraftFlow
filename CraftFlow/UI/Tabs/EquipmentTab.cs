@@ -564,8 +564,19 @@ public sealed class EquipmentTab
         }
 
         _bomResult = combinedRoot;
-        _materialSummary = _materialAggregator.Aggregate(combinedRoot, _config.ShowCrystals);
+        // 先算制作步骤（合并 + 换算为制作次数），再据此推算材料清单，
+        // 保证清单 == Artisan 实际消耗（避免共享中间产物按分支 ceil 多算）。
         _craftSteps = _craftOrderCalculator.CalculateOrder(combinedRoot);
+        _materialSummary = _materialAggregator.AggregateFromSteps(_craftSteps, _config.ShowCrystals);
+
+        // 诊断：打印选中目标和材料汇总，定位"多余物品"来源
+        _log.Information($"[RecalculateBom] 选中目标 ({_selectedItems.Count}): " +
+            string.Join(", ", _selectedItems.Select(t => $"{t.ItemName}×{t.Quantity}")));
+        if (_materialSummary.Count > 0)
+        {
+            _log.Information($"[RecalculateBom] 材料汇总 ({_materialSummary.Count} 种): " +
+                string.Join(", ", _materialSummary.Select(m => $"{m.ItemName}×{m.TotalRequired}")));
+        }
     }
 
     /// <summary>

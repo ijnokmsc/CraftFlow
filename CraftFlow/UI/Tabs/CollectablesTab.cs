@@ -608,7 +608,9 @@ public sealed class CollectablesTab
         }
 
         _bomResult = root;
-        _materialSummary = _materialAggregator.Aggregate(root, _config.ShowCrystals);
+        // 先算制作步骤（合并 + 换算为制作次数），再据此推算材料清单，
+        // 保证清单 == Artisan 实际消耗（避免共享中间产物按分支 ceil 多算）。
         _craftSteps = _craftOrderCalculator.CalculateOrder(root);
+        _materialSummary = _materialAggregator.AggregateFromSteps(_craftSteps, _config.ShowCrystals);
     }
 }
